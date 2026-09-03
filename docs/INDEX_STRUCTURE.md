@@ -1,71 +1,82 @@
-# mr-load — Inferred Library Datastructure
+# mr-load — Inferred Library Datastructure (pass 1, 30 Sales domain)
 
-Methodical study of the Miraex Drive hierarchy (live enumeration, 2026-08-13)
-and the derivation rules the walker implements. Companion to
-`pipeline/library_files/` and to `docs/PLAN_ASSESSMENT.md`.
+Methodical study of the Miraex Drive hierarchy (live enumeration 2026-08-13 and
+2026-09-03) and the rules the walker, the entity card and the dbt tests
+implement. Companion to `context/cards/library.yaml` (the singular map file),
+`pipeline/library_files/` and `dbt/`.
 
-## 1. Observed dialects
+## 1. Scope
 
-Two structural dialects coexist in the trees to be indexed:
+The present pipeline focuses on the **30 Sales** domain:
 
-### Segment dialect — `<taxonomy>/<segment>/<company>/...`
+```
+30 Sales / 20 opportunities and customer data / <segment> / <Company> / **
+```
 
-Observed under `20 Opportunities and customer data` (Drive id
-`1If3SX0GD6FJypMy23na6HizFD6gciw_0`) → `Quantum`
-(`1wNn20ijHfDJjUbdssQUdMYWhtEUGpwLq`), whose children are company-named
-folders: Thorlabs, Toshiba, Alice & Bob, DSO, MEMQ, Novalink, Bluefors,
-Pixel Photonics, Quantinuum, IQM, IonQ, CERN, NVidia, Cisco, Fujitsu, …
-plus occasional loose files ("251226 Miraex Lead Opportunities.xlsx").
+- Walked root: `20 opportunities and customer data` (`1If3SX0GD6FJypMy23na6HizFD6gciw_0`),
+  `path_prefix = "30 Sales"` so emitted legacy paths match the legacy convention.
+- Segment example: `Quantum` (`1wNn20ijHfDJjUbdssQUdMYWhtEUGpwLq`) — ~50 company-named
+  folders beneath it (Thorlabs, Toshiba, Alice & Bob, Bluefors, IQM, CERN, NVidia, …).
+- **Folder name = company name.** Every file beneath a company folder is a library
+  asset anchored to that company.
+- **Out of scope (indexable later):** `70 Tradeshows` and `Events & Tradeshows` —
+  pruned at walk time by `scope.exclude_segments`, re-asserted in dbt.
 
-A company folder is itself a library record (the legacy example row for
-Thorlabs points `legacy_file_link` at the *folder* URL), and every file
-beneath it inherits the company candidate.
+## 2. Node identity
 
-### Engagement dialect — `<year>[_ ]<counterparty/program>`
+Mirrors ic-load's `unflatten_hierarchy.py`:
 
-Observed under the deals root (`1VM3c4ly7s3XUVY0xe5Dy_XaaGsOaKGKA`):
-`2026_Thales`, `2026 Light Trace`, `2025 IBM`, `2025_QPHOX`, `2024_Nokia`,
-`2023_CSEM MPW`, `2023 Luxtelligence`, `2026 flagship armasuisse
-innosuisse`, … Year prefix + remainder make the *deal* candidate; the
-de-yeared remainder is the *company* candidate.
+| Field | Rule | Example |
+|---|---|---|
+| `node_key` | `"|".join(legacy path incl. name)` | `30 Sales|20 opportunities and customer data|Quantum|Toshiba` |
+| `parent_key` | key of the parent, NULL at depth 1 | `30 Sales|20 opportunities and customer data|Quantum` |
+| `depth` | 1-based within the walked root | Quantum = 1, Toshiba = 2, files ≥ 3 |
+| `path_code` | ordinal or initial per parent segment | `3020Q` |
+| `legacy_library_id` | `path_code-sha1(node_key)[:8]` (default), `pathcode`, or `dr:<sha1>` | `3020Q-00cbe248` |
 
-## 2. Path-code / id derivation
+The bare path code reproduces the legacy example (`3020Q`) but is not unique
+across siblings; the hash suffix restores uniqueness.
 
-The legacy index encodes taxonomy ordinals into ids — example row:
-path `30 Sales/20 opportunities and customer data /quantum` →
-`legacy_library_id = 3020Q`. Rule, replicated in `walker.segment_code`:
+## 3. Classification grammar
 
-- segment starts with digits → contribute the digits (`30 Sales` → `30`)
-- otherwise → first alphanumeric, uppercased (`quantum` → `Q`)
-- concatenate along the parent path (`3020Q`)
+Folder at depth *d*, first match wins:
 
-The bare code is **not unique across siblings** (Thorlabs and Toshiba
-would both sit under `3020Q`), so the default id scheme is
-`pathcode-hash`: `3020Q-<sha1(full_path)[:8]>`. `--id-scheme pathcode`
-reproduces the bare legacy code; `--id-scheme hash` mirrors ic-load's
-synthetic `fs:<sha1[:12]>` ids (`dr:` prefix here).
+1. `^(19|20)\d{2}[\s_-]+rest` → **engagement_folder** (deal-shaped; kept for other roots)
+2. `^\d+\s` → **taxonomy**
+3. *d* ≤ `segment_depth` (1) and no company inherited → **segment**
+4. no company inherited yet → **company_folder** — sets `company_node_key`
+5. otherwise → **document** folder
 
-## 3. Classification grammar (walker)
+Files are **document** leaves inheriting `company_node_key`, plus an
+`asset_class` from the card (first match wins):
 
-For a folder at depth *d* (1-based, within the walked root), first match
-wins:
+| class | rule | routing |
+|---|---|---|
+| `deal_candidate` | extension `pdf` **and** name ~ `(?i)(^|[^a-z0-9])(PO|Billing)([^a-z0-9]|$)` | pass 2: also indexed as a deal (never during the DFS) |
+| `parked_for_review` | extension `pdf` | operator review queue before deal processing |
+| `shortcut` | Drive shortcut mime | never attached |
+| `asset` | default | — |
 
-1. `^((19|20)\d{2})[\s_-]+rest` → **engagement_folder**; deal = full name,
-   year = the prefix, company = rest (unless inherited).
-2. `^\d+\s` → **taxonomy** (numbered structural folder).
-3. *d* ≤ `--segment-depth` (default 1) and no company inherited →
-   **segment** (e.g. Quantum).
-4. No company inherited yet → **company_folder**; company = folder name.
-5. Otherwise → **document** folder.
+All non-shortcut classes are attached as notes on the company in pass 1.
 
-Files are always **document** leaves; both inherit segment/company/deal
-candidates from the nearest classified ancestors. Classification lands in
-`libr_category`, node kind in `libr_type` (`folder`/`file`).
+## 4. Cardinality contract (the part that was overlooked, now explicit)
 
-## 4. Column contract
+| Relation | Type | Policy | Enforced by |
+|---|---|---|---|
+| Segment → Company | 1:N, unique names | STOP | `assert_company_name_unique_within_segment` |
+| Company → Library | 1:N | — | `company_node_key` edge |
+| Library → Company | N:1 | REJECT | `silver_library_index.legacy_company_id` not_null + relationships; orphans → `silver_library_orphans` (WARN) |
+| Drive node → parent | N:1 (tree) | REJECT | `parents_count = 1` + `assert_no_multi_parent_nodes` (Drive is a DAG; the API `parents` array exposes it, rclone manifests cannot) |
+| node_key uniqueness | PK | STOP | `unique` test (duplicate sibling names are counted by the walker too) |
+| parent_key → node_key | FK | STOP | `relationships` test |
+
+**BigQuery reality** (verified against dbt docs): only `not_null` is enforced;
+`primary_key`/`foreign_key` are declared, not enforced; `unique`/`check` are
+unsupported. Enforcement = dbt data tests + singular tests, as in ic-load.
+
+## 5. Silver column contract
 
 First 19 columns are drop-in parity with the icalps silver table
-(`stg_library_normalised` lineage), owner-prefix configurable
 (`--owner-prefix icalps` for byte-parity, default `mirx`):
 
 ```
@@ -76,40 +87,32 @@ libr_created_by  libr_updated_by  libr_created_at  libr_updated_at
 mirx_owner_email  mirx_owner_fullname  loaded_at
 ```
 
-The `legacy_*_id` FK columns are emitted **empty by design** — the CRM
-destination is virtual at index time. The walker's candidates travel in
-trailing columns the associativity layer joins on to fill them:
+`legacy_company_id` = `legacy_library_id` of the anchoring **company folder**
+row (the N:1 edge). The HubSpot company id lives in the runner ledger
+(`companies_resolved`) and is joined at attach time. Trailing columns carry
+`node_key`, `parent_key`, `company_node_key`, `asset_class`, inference and
+Drive metadata.
+
+## 6. Pipeline (pass 1)
 
 ```
-inferred_segment  inferred_company_name  inferred_deal_name  inferred_year
-path_code  depth  drive_file_id  drive_md5  drive_size  drive_mimetype
+walk        Drive API DFS (parents[], owners, createdTime, webViewLink) → library_hierarchy.csv
+bq-load     hierarchy → mrload_raw.library_hierarchy                       [MRLOAD_APPROVE_BQ_LOAD]
+dbt run/test silver_library_company / _index / _deal_candidates / _parked / _orphans + cardinality tests
+companies   company folder → HubSpot company (search by name, create)     [MRLOAD_APPROVE_COMPANY_CREATE]
+attach      download on demand → POST files → note → associate to company [MRLOAD_APPROVE_FILES_UPLOAD, MRLOAD_APPROVE_FILE_NOTES_POST]
+unmigrate   delete attached notes from the ledger                          [MRLOAD_APPROVE_UNMIGRATE]
 ```
 
-Deliberate divergence from ic-load, stated openly: the silver
-**at-least-one-FK filter is not applied** here (it would drop every row
-before association). `--require-inference` approximates it by dropping
-rows with neither company nor deal candidate.
+Orchestration: `ansible/playbook.yml` on localhost (Cloud Shell or a laptop);
+every write gate defaults to DRY. rclone is no longer on the critical path (no
+GCS mirror is needed: binaries stream from Drive to HubSpot on demand); the
+`index` sub-command keeps the rclone-manifest source as an offline fallback.
 
-## 5. Upstream associativity (HubSpot)
+## 7. Deferred
 
-The intended join path, mirroring ic-load's `overrides.SandboxOverrideMap`
-resolution stage:
-
-1. `bq load` the silver CSV into `mrload.library_index`
-   (`pipeline/library_files/sql/library_index.schema.json`).
-2. Resolve `inferred_company_name` → HubSpot company id (name-normalised
-   match against the synced companies table; ic-load's
-   `text_normalization` conventions apply).
-3. Resolve `inferred_deal_name`/`inferred_year` → HubSpot deal id.
-4. Write resolutions back into `legacy_company_id`/`legacy_deal_id`, at
-   which point the table satisfies the original icalps silver contract and
-   the ic-load uploader pattern (two-phase upload + note-attach with
-   idempotency ledger) applies unchanged.
-
-## 6. Bronze provenance
-
-Bronze = `rclone lsjson -R --hash drive:` over the same remote the sync
-copies, so index and clone cannot drift. Fields not present in lsjson
-(`createdTime`, owner) stay NULL / config-supplied until a Drive API
-enrichment pass; `legacy_file_link` is reconstructed from the Drive id in
-the same URL forms the legacy index stored.
+- Pass 2: deal indexing of `deal_candidate` PDFs (separate walk over
+  `silver_library_deal_candidates`).
+- Contacts: no contact level exists in the tree; contact association is not
+  inferred.
+- Tradeshows (70): indexable with the same grammar, excluded from this pipeline.

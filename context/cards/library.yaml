@@ -1,0 +1,113 @@
+# Entity card — mr-load Library (Miraex Drive → HubSpot notes-on-company)
+# Format: ic-load context/cards/_schema.md. Loaded by pipeline/library_files/card.py.
+entity: Library
+object_type: notes            # assets land in HubSpot as notes with file attachments
+
+domain: "30 Sales"
+
+medallion:
+  bronze: mrload_raw.library_hierarchy           # walker output, bq load
+  silver: mrload.silver_library_index            # dbt, 19-col parity with icalps
+  companies: mrload.silver_library_company       # dbt, one row per company folder
+  gold: hubspot.notes                            # via uploader (upload → note → associate)
+
+primary_key:
+  source: node_key            # "30 Sales|20 opportunities and customer data|Quantum|Toshiba|file.pdf"
+  canonical: legacy_library_id
+  type: string
+
+scope:
+  # Pass 1 walks these roots only. Tradeshows (ordinal 70) are indexable but
+  # explicitly OUT of the present pipeline.
+  roots:
+    - name: "20 opportunities and customer data"
+      drive_id: 1If3SX0GD6FJypMy23na6HizFD6gciw_0
+      path_prefix: "30 Sales"
+      segment_depth: 1
+  exclude_segments:           # regex, matched against every path segment; subtree pruned
+    - "^70\\b"
+    - "(?i)tradeshow"
+    - "(?i)^events & tradeshows$"
+
+levels:
+  - depth: 1
+    role: segment             # e.g. Quantum
+  - depth: 2
+    role: company             # folder name = company name (e.g. Toshiba)
+  - depth: ">=3"
+    role: asset               # every file under the company folder is a library asset
+
+cardinality:
+  - relation: "Segment → Company"
+    type: "1:N"
+    description: "One segment folder holds many company folders; company name unique within segment"
+  - relation: "Company → Library"
+    type: "1:N"
+    description: "One company folder anchors many assets (files at any depth beneath it)"
+  - relation: "Library → Company"
+    type: "N:1"
+    description: "Every asset has exactly one company anchor (company_node_key)"
+    violation_policy: REJECT
+  - relation: "Drive node → parent"
+    type: "N:1"
+    description: "Drive is a DAG; multi-parent nodes (parents_count > 1) violate the tree assumption"
+    violation_policy: REJECT
+
+asset_classification:
+  # First match wins. Applied to files only. Pass 1 attaches ALL classes as
+  # notes on the company; the class only routes the second pass / review queue.
+  - class: deal_candidate
+    when: "extension == pdf and name ~ (?i)(^|[^a-z0-9])(PO|Billing)([^a-z0-9]|$)"
+    pass: 2
+    description: "PO / Billing PDFs are ALSO indexed as deals in a separate pass (not during DFS)"
+  - class: parked_for_review
+    when: "extension == pdf"
+    pass: review
+    description: "All other PDFs parked awaiting operator review before deal processing"
+  - class: shortcut
+    when: "mime == application/vnd.google-apps.shortcut"
+    pass: skip
+  - class: asset
+    when: default
+
+fk_dependencies:
+  - entity: Company
+    violation_policy: REJECT
+    staging_fk: silver_library_index.company_node_key
+    references: silver_library_company.company_node_key
+    description: "An asset cannot be attached if its company folder was not resolved"
+
+import_order: 2               # Company resolution (1) precedes note attach (2)
+
+hubspot:
+  attach_as: note
+  note_association: "note → company (default association; HUBSPOT_DEFINED 190)"
+  company_resolution:
+    strategy: search_by_name_then_create
+    search: "POST /crm/v3/objects/companies/search — name EQ folder name"
+    create_gate: MRLOAD_APPROVE_COMPANY_CREATE
+  gates:
+    files_upload: MRLOAD_APPROVE_FILES_UPLOAD
+    file_notes_post: MRLOAD_APPROVE_FILE_NOTES_POST
+    unmigrate: MRLOAD_APPROVE_UNMIGRATE
+
+silver_validation:
+  stop_checks:
+    - unique_node_key
+    - parent_key_references_node_key
+    - no_multi_parent_nodes
+    - no_excluded_scope_nodes
+    - company_name_unique_within_segment
+    - deal_candidates_are_pdf
+  warn_checks:
+    - asset_has_company_anchor        # loose files at segment level are reported, not attached
+
+pipeline_status:
+  pass_1_live_push_ready: false
+  blockers:
+    - "Share scope root with the service account (silent-failure step)"
+    - "Company create + upload + note gates default DRY"
+  deferred:
+    - "Pass 2: deal indexing of deal_candidate PDFs"
+    - "Tradeshows (70) indexing"
+  runner_entity_arg: library

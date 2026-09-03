@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: mrload_raw
+    description: "Bronze — walker output loaded by `runner bq-load` (pipeline/library_files/hierarchy.py)"
+    schema: "{{ var('raw_dataset') }}"
+    tables:
+      - name: library_hierarchy
+        description: "One row per walked Drive node: NodeKey/ParentKey/Depth + Drive metadata + classification"
+        config:
+          loaded_at_field: walked_at
+        columns:
+          - name: node_key
+            description: "Primary key — '|'-joined legacy path incl. node name"
+          - name: parent_key
+            description: "FK → node_key of the parent (NULL at depth 1)"
+          - name: company_node_key
+            description: "FK → node_key of the anchoring company folder (Library → Company N:1)"
+          - name: parents_count
+            description: "Number of Drive parents; > 1 is a DAG violation of the tree assumption"

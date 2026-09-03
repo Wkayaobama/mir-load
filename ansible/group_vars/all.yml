@@ -1,0 +1,15 @@
+# Operator-tunable inputs for playbook.yml. Secrets stay in .env.mrload / env.
+repo_root: "{{ playbook_dir }}/.."
+python: "python3"
+scope_root: "20 opportunities and customer data"     # card scope root (name or drive id)
+hierarchy_csv: "{{ repo_root }}/.mrload/library_hierarchy.csv"
+silver_preview_csv: "{{ repo_root }}/.mrload/silver_preview.csv"
+ledger_path: "{{ repo_root }}/.mrload/ledger.sqlite"
+bq_raw_dataset: "mrload_raw"
+dbt_target: "dev"                                   # dev = oauth (Cloud Shell/localhost), runner = SA keyfile
+
+# Approval gates — every write is DRY unless the matching flag is "1".
+approve_bq_load: "0"
+approve_company_create: "0"
+approve_files_upload: "0"
+approve_file_notes_post: "0"

@@ -1,5 +1,13 @@
 # mr-load — Plan Assessment & Runbook
 
+> **Revision 2026-09-03.** After the cardinality review the architecture below
+> was amended: the Drive API depth-first walk (`runner walk`) replaced rclone as
+> the bronze source, dbt-bigquery became the silver/constraint layer
+> (`dbt/`), the GCS mirror was dropped (assets stream from Drive to HubSpot on
+> demand), and orchestration moved to `ansible/playbook.yml`. Scope narrowed to
+> the 30 Sales domain; tradeshows deferred. See `docs/INDEX_STRUCTURE.md`.
+> The rclone runbook below is retained as the optional mirror path only.
+
 Assessment date: 2026-08-13. Every claim below was verified against primary documentation
 (rclone.org, cloud.google.com, docs.digitalocean.com) or tested live in the working
 environment on this date. Nothing here is from memory alone.

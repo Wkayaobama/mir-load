@@ -1,16 +1,13 @@
-"""Bronze source — the rclone manifest of the replicated Drive tree.
+"""Bronze node record — one shape for both walk sources.
 
-``rclone lsjson -R --hash drive:`` emits one JSON array with an entry per
-node, relative to the configured root_folder_id. That file is the bronze
-layer of mr-load: it is produced by the same tool that performs the byte
-copy, so the index can never drift from what was actually cloned.
+Primary source is the Drive API DFS (drive_walker.py), which fills every
+field including parents_count, created_time, owners and webViewLink.
+Fallback source is an ``rclone lsjson -R --hash`` manifest, which lacks
+those fields (they stay None / parents_count=1) — rclone is no longer on
+the critical path but the manifest reader is kept for offline runs.
 
-Entries carry: Path (forward-slash relative path), Name, Size (-1 for
-native Google docs), MimeType, ModTime, IsDir, ID (Drive file id) and
-Hashes.md5 when --hash was passed. lsjson does not emit webViewLink, so
-share links are reconstructed from the id, matching the URL forms the
-legacy index stored (drive.google.com/drive/folders/<id> for folders,
-drive.google.com/file/d/<id>/view for files).
+Share links are reconstructed from the Drive id when webViewLink is absent,
+in the URL forms the legacy index stored.
 """
 from __future__ import annotations
 
@@ -20,6 +17,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
+SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
 
 
 @dataclass(frozen=True)
@@ -32,9 +30,21 @@ class ManifestEntry:
     size: Optional[int]  # None when unknown (native Google docs report -1)
     mod_time: Optional[str]
     md5: Optional[str]
+    created_time: Optional[str] = None
+    owner_email: Optional[str] = None
+    owner_name: Optional[str] = None
+    web_view_link: Optional[str] = None
+    parents_count: int = 1
+    shortcut_target_id: Optional[str] = None
+
+    @property
+    def extension(self) -> str:
+        return self.name.rsplit(".", 1)[-1].lower() if "." in self.name else ""
 
     @property
     def link(self) -> Optional[str]:
+        if self.web_view_link:
+            return self.web_view_link
         if not self.drive_id:
             return None
         if self.is_dir:

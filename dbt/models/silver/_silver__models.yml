@@ -1,0 +1,99 @@
+version: 2
+
+models:
+  - name: silver_library_company
+    description: "Company folders → HubSpot company objects (one row per folder)"
+    config:
+      contract:
+        enforced: true
+    constraints:
+      - type: primary_key
+        columns: [company_node_key]
+        warn_unenforced: false   # BigQuery: declared, not enforced (see docs)
+    columns:
+      - name: company_node_key
+        data_type: string
+        constraints: [{type: not_null}]
+        tests: [not_null, unique]
+      - name: company_name
+        data_type: string
+        constraints: [{type: not_null}]
+        tests: [not_null]
+      - name: legacy_company_id
+        data_type: string
+        constraints: [{type: not_null}]
+        tests: [not_null, unique]
+      - name: segment_node_key
+        data_type: string
+      - name: segment
+        data_type: string
+      - name: drive_id
+        data_type: string
+      - name: link
+        data_type: string
+      - name: drive_created_at
+        data_type: timestamp
+      - name: drive_modified_at
+        data_type: timestamp
+      - name: owner_email
+        data_type: string
+      - name: asset_count
+        data_type: int64
+      - name: deal_candidate_count
+        data_type: int64
+      - name: parked_count
+        data_type: int64
+      - name: shortcut_count
+        data_type: int64
+      - name: hs_company_id
+        data_type: string
+
+  - name: silver_library_index
+    description: "19-col icalps parity index of every asset anchored to a company"
+    constraints:
+      - type: primary_key
+        columns: [legacy_library_id]
+        warn_unenforced: false
+      - type: foreign_key
+        columns: [legacy_company_id]
+        to: ref('silver_library_company')
+        to_columns: [legacy_company_id]
+        warn_unenforced: false
+    columns:
+      - name: legacy_library_id
+        tests: [not_null, unique]
+      - name: legacy_company_id
+        description: "Library → Company N:1 (REJECT on violation)"
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_library_company')
+                field: legacy_company_id
+      - name: legacy_file_path
+        tests: [not_null]
+      - name: legacy_file_name
+        tests: [not_null]
+      - name: node_key
+        tests: [not_null, unique]
+      - name: asset_class
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['asset', 'deal_candidate', 'parked_for_review']
+
+  - name: silver_library_deal_candidates
+    description: "Pass-2 queue (PO / Billing PDFs)"
+    columns:
+      - name: legacy_library_id
+        tests: [not_null, unique]
+
+  - name: silver_library_parked
+    description: "Operator review queue (other PDFs)"
+    columns:
+      - name: legacy_library_id
+        tests: [not_null, unique]
+
+  - name: silver_library_orphans
+    description: "In-scope files without a company anchor — reported, not attached"

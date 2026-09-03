@@ -1,0 +1,35 @@
+-- Typed, lightly-cleaned view over the bronze hierarchy. Scope exclusion is
+-- applied at walk time; the singular test assert_no_excluded_scope_nodes
+-- re-checks it here so a mis-walked file cannot leak into silver.
+select
+    node_key,
+    node_name,
+    parent_key,
+    cast(depth as int64)                        as depth,
+    rel_path,
+    legacy_file_path,
+    legacy_library_id,
+    cast(is_dir as bool)                        as is_dir,
+    libr_category,
+    asset_class,
+    company_node_key,
+    inferred_segment,
+    inferred_company_name,
+    inferred_deal_name,
+    inferred_year,
+    path_code,
+    drive_id,
+    drive_mimetype,
+    cast(drive_size as int64)                   as drive_size,
+    drive_md5,
+    cast(drive_created_at as timestamp)         as drive_created_at,
+    cast(drive_modified_at as timestamp)        as drive_modified_at,
+    owner_email,
+    owner_name,
+    link,
+    coalesce(cast(parents_count as int64), 1)   as parents_count,
+    lower(extension)                            as extension,
+    shortcut_target_id,
+    cast(walked_at as timestamp)                as walked_at,
+    lower(extension) = 'pdf'                    as is_pdf
+from {{ source('mrload_raw', 'library_hierarchy') }}
