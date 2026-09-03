@@ -13,3 +13,5 @@ approve_bq_load: "0"
 approve_company_create: "0"
 approve_files_upload: "0"
 approve_file_notes_post: "0"
+approve_deal_create: "0"
+run_pass2: false

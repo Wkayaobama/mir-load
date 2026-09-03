@@ -47,6 +47,9 @@ models:
         data_type: int64
       - name: hs_company_id
         data_type: string
+        description: "From ledger companies_resolved (step 6); NULL before ledger-export"
+      - name: resolution_status
+        data_type: string
 
   - name: silver_library_index
     description: "19-col icalps parity index of every asset anchored to a company"

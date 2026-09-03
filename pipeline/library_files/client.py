@@ -51,6 +51,31 @@ class HubSpotClient:
         resp.raise_for_status()
         return resp.json()
 
+    # -- CRM: deals (pass 2) -------------------------------------------------
+
+    def search_deals_by_name(self, dealname: str, *, limit: int = 5) -> list[dict]:
+        url = f"{self.base_url}/crm/v3/objects/deals/search"
+        payload = {
+            "filterGroups": [{"filters": [{"propertyName": "dealname", "operator": "EQ", "value": dealname}]}],
+            "properties": ["dealname", "pipeline", "dealstage"],
+            "limit": limit,
+        }
+        resp = self._session.post(url, json=payload, timeout=self.timeout_s)
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    def create_deal(self, *, dealname: str, dealstage: str, pipeline: Optional[str] = None,
+                    **extra_properties: str) -> dict:
+        """POST /crm/v3/objects/deals. dealname + dealstage are required by HubSpot;
+        pipeline defaults to the portal default pipeline when omitted."""
+        props = {"dealname": dealname, "dealstage": dealstage, **extra_properties}
+        if pipeline:
+            props["pipeline"] = pipeline
+        url = f"{self.base_url}/crm/v3/objects/deals"
+        resp = self._session.post(url, json={"properties": props}, timeout=self.timeout_s)
+        resp.raise_for_status()
+        return resp.json()
+
     # -- CRM: notes ----------------------------------------------------------
 
     def create_note(

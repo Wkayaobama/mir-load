@@ -16,6 +16,7 @@
     MRLOAD_APPROVE_COMPANY_CREATE: "{{ approve_company_create }}"
     MRLOAD_APPROVE_FILES_UPLOAD: "{{ approve_files_upload }}"
     MRLOAD_APPROVE_FILE_NOTES_POST: "{{ approve_file_notes_post }}"
+    MRLOAD_APPROVE_DEAL_CREATE: "{{ approve_deal_create }}"
 
   tasks:
     - name: Install python dependencies
@@ -79,3 +80,33 @@
         chdir: "{{ repo_root }}"
       register: attach_out
       failed_when: attach_out.rc not in [0, 1]
+
+    - name: Operator review queues (deal candidates, parked, orphans, decisions template)
+      command: >
+        {{ python }} -m pipeline.library_files.runner review-export
+        --hierarchy "{{ hierarchy_csv }}" --out-dir "{{ repo_root }}/.mrload/review"
+      args:
+        chdir: "{{ repo_root }}"
+
+    - name: Step 6 — ledger → BigQuery (gated by approve_bq_load)
+      command: >
+        {{ python }} -m pipeline.library_files.runner ledger-export
+        --ledger "{{ ledger_path }}" --dataset "{{ bq_raw_dataset }}"
+      args:
+        chdir: "{{ repo_root }}"
+
+    - name: dbt build again with HubSpot ids joined (gated by approve_bq_load)
+      command: dbt build --profiles-dir . --target "{{ dbt_target }}"
+      args:
+        chdir: "{{ repo_root }}/dbt"
+      when: approve_bq_load == "1"
+
+    - name: Step 7 — pass 2 deals from the approved decisions file (gated)
+      command: >
+        {{ python }} -m pipeline.library_files.runner deals
+        --decisions "{{ repo_root }}/.mrload/review/deal_decisions.csv" --ledger "{{ ledger_path }}"
+      args:
+        chdir: "{{ repo_root }}"
+      register: deals_out
+      failed_when: deals_out.rc not in [0, 1]
+      when: run_pass2 | default(false)

@@ -7,13 +7,21 @@ database on the critical path, so the ledger is a local SQLite file
   files_uploaded      — Phase 1 outcome per legacy_library_id
   file_notes_posted   — Phase 2 outcome per legacy_library_id
   companies_resolved  — company folder → HubSpot company id (pass-1 step 1)
+  deals_created       — deal_candidate asset → HubSpot deal id (pass 2)
+
+``export_tables`` dumps every table to CSV so `runner ledger-export` can
+push the HubSpot ids back into BigQuery (mrload_raw.*), where dbt joins
+them into the silver tables.
 """
 from __future__ import annotations
 
+import csv
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol
+
+LEDGER_TABLES = ("files_uploaded", "file_notes_posted", "companies_resolved", "deals_created")
 
 
 class LedgerLike(Protocol):
@@ -26,6 +34,9 @@ class LedgerLike(Protocol):
     def record_unattach(self, legacy_id: str, status: str, error: str | None) -> None: ...
     def company_map(self) -> dict[str, str]: ...
     def record_company(self, entry: Mapping[str, object]) -> None: ...
+    def note_map(self) -> dict[str, str]: ...
+    def deal_map(self) -> dict[str, str]: ...
+    def record_deal(self, entry: Mapping[str, object]) -> None: ...
 
 
 _DDL = """
@@ -52,6 +63,16 @@ CREATE TABLE IF NOT EXISTS companies_resolved (
     company_node_key  TEXT PRIMARY KEY,
     company_name      TEXT,
     hs_company_id     TEXT,
+    status            TEXT NOT NULL,
+    error             TEXT,
+    resolved_at       TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS deals_created (
+    legacy_library_id TEXT PRIMARY KEY,
+    hs_deal_id        TEXT,
+    dealname          TEXT,
+    hs_company_id     TEXT,
+    hs_note_id        TEXT,
     status            TEXT NOT NULL,
     error             TEXT,
     resolved_at       TEXT NOT NULL
@@ -192,3 +213,58 @@ class SqliteLedger:
                     entry["status"], entry.get("error"), _now(),
                 ),
             )
+
+    # -- notes / deals (pass 2) ---------------------------------------------
+
+    def note_map(self) -> dict[str, str]:
+        """legacy_library_id → hs_note_id for rows attached in pass 1."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT legacy_library_id, hs_note_id FROM file_notes_posted "
+                "WHERE status = 'attached' AND hs_note_id IS NOT NULL"
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def deal_map(self) -> dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT legacy_library_id, hs_deal_id FROM deals_created WHERE hs_deal_id IS NOT NULL"
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def record_deal(self, entry: Mapping[str, object]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO deals_created
+                    (legacy_library_id, hs_deal_id, dealname, hs_company_id, hs_note_id, status, error, resolved_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(legacy_library_id) DO UPDATE SET
+                    hs_deal_id = excluded.hs_deal_id, dealname = excluded.dealname,
+                    hs_company_id = excluded.hs_company_id, hs_note_id = excluded.hs_note_id,
+                    status = excluded.status, error = excluded.error, resolved_at = excluded.resolved_at
+                """,
+                (
+                    entry["legacy_library_id"], entry.get("hs_deal_id"), entry.get("dealname"),
+                    entry.get("hs_company_id"), entry.get("hs_note_id"), entry["status"],
+                    entry.get("error"), _now(),
+                ),
+            )
+
+    # -- export (step 6: ledger → BigQuery) ----------------------------------
+
+    def export_tables(self, out_dir: Path) -> dict[str, Path]:
+        """Dump every ledger table to <out_dir>/<table>.csv (header always written)."""
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out: dict[str, Path] = {}
+        with self._connect() as conn:
+            for table in LEDGER_TABLES:
+                cur = conn.execute(f"SELECT * FROM {table}")
+                cols = [d[0] for d in cur.description]
+                path = out_dir / f"{table}.csv"
+                with path.open("w", encoding="utf-8", newline="") as fp:
+                    w = csv.writer(fp)
+                    w.writerow(cols)
+                    w.writerows(cur.fetchall())
+                out[table] = path
+        return out

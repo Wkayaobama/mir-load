@@ -10,6 +10,12 @@ Sub-commands (pass 1, 30 Sales domain — see context/cards/library.yaml):
   attach     — Upload every asset under a resolved company and attach it as
                a note on that company (two gates, dry-run default).
   unmigrate  — Roll back attached notes using the ledger as the index.
+  review-export — Operator queues: deal candidates, parked PDFs, orphans, and
+               the deal_decisions.csv template for pass 2.
+  ledger-export — Step 6: dump the ledger tables to CSV and load them into
+               BigQuery so dbt can join the HubSpot ids into silver.
+  deals      — Pass 2: create deals from the approved decisions file, associate
+               deal → company and note → deal (MRLOAD_APPROVE_DEAL_CREATE).
 
 Approval gates mirror ic-load: an env var must be exactly "1" to go live.
 """
@@ -25,10 +31,11 @@ from pathlib import Path
 
 from .card import DEFAULT_CARD_PATH, load_library_card
 from .companies import company_folders_from_hierarchy, resolve_companies
+from .deals import read_decisions, resolve_deals, write_decisions_template
 from .config import Settings
 from .drive_walker import ApiDriveLister, DriveFile, dfs_entries
 from .hierarchy import HierarchyWriter, read_hierarchy_csv
-from .ledger import SqliteLedger
+from .ledger import LEDGER_TABLES, SqliteLedger
 from .manifest import load_manifest
 from .silver_library import SilverIndexBuilder
 from .uploader import HubSpotFileUploader, LibraryFileRow
@@ -39,6 +46,7 @@ APPROVE_COMPANY_CREATE_ENV = "MRLOAD_APPROVE_COMPANY_CREATE"
 APPROVE_FILES_UPLOAD_ENV = "MRLOAD_APPROVE_FILES_UPLOAD"
 APPROVE_FILE_NOTES_POST_ENV = "MRLOAD_APPROVE_FILE_NOTES_POST"
 APPROVE_UNMIGRATE_ENV = "MRLOAD_APPROVE_UNMIGRATE"
+APPROVE_DEAL_CREATE_ENV = "MRLOAD_APPROVE_DEAL_CREATE"
 
 
 def _gate(env: str) -> bool:
@@ -259,6 +267,73 @@ def _add_emit_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--require-anchor", action="store_true", help="silver preview: drop files with no company anchor")
 
 
+def cmd_review_export(args: argparse.Namespace) -> int:
+    """Operator queues from the hierarchy CSV (no network)."""
+    import csv
+
+    rows = read_hierarchy_csv(Path(args.hierarchy))
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cols = list(rows[0].keys()) if rows else []
+    queues = {
+        "deal_candidates.csv": [r for r in rows if r.get("asset_class") == "deal_candidate"],
+        "parked_for_review.csv": [r for r in rows if r.get("asset_class") == "parked_for_review"],
+        "orphans.csv": [r for r in rows if r.get("is_dir") in ("False", "false", "0") and not r.get("company_node_key")],
+        "multi_parent.csv": [r for r in rows if (r.get("parents_count") or "1") not in ("", "1")],
+        "companies.csv": [r for r in rows if r.get("libr_category") == "company_folder"],
+    }
+    summary: dict = {"out_dir": str(out_dir.resolve())}
+    for name, subset in queues.items():
+        with (out_dir / name).open("w", encoding="utf-8", newline="") as fp:
+            w = csv.DictWriter(fp, fieldnames=cols)
+            w.writeheader()
+            w.writerows(subset)
+        summary[name] = len(subset)
+    summary["deal_decisions.csv"] = write_decisions_template(rows, out_dir / "deal_decisions.csv")
+    json.dump(summary, sys.stdout, indent=2)
+    print()
+    return 0
+
+
+def cmd_ledger_export(args: argparse.Namespace) -> int:
+    settings = Settings.from_env()
+    _banner("ledger-export", [("bq load of ledger tables", APPROVE_BQ_LOAD_ENV)])
+    ledger = _ledger(settings, args.ledger)
+    paths = ledger.export_tables(Path(args.out_dir))
+    schema_dir = Path(__file__).parent / "sql" / "ledger"
+    rc = 0
+    for table in LEDGER_TABLES:
+        cmd = [
+            "bq", "load", "--source_format=CSV", "--skip_leading_rows=1", "--allow_quoted_newlines",
+            "--replace", f"{args.dataset}.{table}", str(paths[table]), str(schema_dir / f"{table}.schema.json"),
+        ]
+        print(" ".join(shlex.quote(c) for c in cmd))
+        if _gate(APPROVE_BQ_LOAD_ENV):
+            rc = subprocess.run(cmd).returncode or rc
+    return rc
+
+
+def cmd_deals(args: argparse.Namespace) -> int:
+    settings = Settings.from_env()
+    _banner("deals (pass 2)", [("deal create + associations", APPROVE_DEAL_CREATE_ENV)])
+    decisions = read_decisions(
+        Path(args.decisions),
+        default_pipeline=args.pipeline or os.environ.get("MRLOAD_DEAL_PIPELINE"),
+        default_stage=args.dealstage or os.environ.get("MRLOAD_DEAL_STAGE"),
+    )
+    if not decisions:
+        print("decisions file is empty", file=sys.stderr)
+        return 1
+    ledger = _ledger(settings, args.ledger)
+    results = resolve_deals(
+        decisions, client=_client_or_none(settings), ledger=ledger,
+        live_create=_gate(APPROVE_DEAL_CREATE_ENV),
+    )
+    json.dump(results, sys.stdout, indent=2)
+    print()
+    return 1 if any(r["status"] in ("failed", "partial") for r in results) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pipeline.library_files.runner")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -299,6 +374,24 @@ def main(argv: list[str] | None = None) -> int:
     un = sub.add_parser("unmigrate", help="Delete attached notes using the ledger (gated).")
     un.add_argument("--ledger")
     un.set_defaults(func=cmd_unmigrate)
+
+    rev = sub.add_parser("review-export", help="Operator queues + deal_decisions.csv template (offline).")
+    rev.add_argument("--hierarchy", required=True)
+    rev.add_argument("--out-dir", default=".mrload/review")
+    rev.set_defaults(func=cmd_review_export)
+
+    lex = sub.add_parser("ledger-export", help="Step 6: ledger tables → CSV → BigQuery (gated bq load).")
+    lex.add_argument("--ledger")
+    lex.add_argument("--out-dir", default=".mrload/ledger_export")
+    lex.add_argument("--dataset", required=True, help="raw dataset, e.g. mrload_raw")
+    lex.set_defaults(func=cmd_ledger_export)
+
+    dl = sub.add_parser("deals", help="Pass 2: deals from the approved decisions file (gated).")
+    dl.add_argument("--decisions", required=True, help="edited .mrload/review/deal_decisions.csv")
+    dl.add_argument("--ledger")
+    dl.add_argument("--pipeline", help="default pipeline id (or MRLOAD_DEAL_PIPELINE)")
+    dl.add_argument("--dealstage", help="default dealstage id (or MRLOAD_DEAL_STAGE)")
+    dl.set_defaults(func=cmd_deals)
 
     args = parser.parse_args(argv)
     return args.func(args)

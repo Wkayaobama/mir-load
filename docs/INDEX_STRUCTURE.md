@@ -93,15 +93,19 @@ row (the N:1 edge). The HubSpot company id lives in the runner ledger
 `node_key`, `parent_key`, `company_node_key`, `asset_class`, inference and
 Drive metadata.
 
-## 6. Pipeline (pass 1)
+## 6. Pipeline (steps 0 → 7, scripted in `scripts/run_pass1.sh`, detailed in `docs/RUNBOOK_PASS1.md`)
 
 ```
-walk        Drive API DFS (parents[], owners, createdTime, webViewLink) → library_hierarchy.csv
-bq-load     hierarchy → mrload_raw.library_hierarchy                       [MRLOAD_APPROVE_BQ_LOAD]
-dbt run/test silver_library_company / _index / _deal_candidates / _parked / _orphans + cardinality tests
-companies   company folder → HubSpot company (search by name, create)     [MRLOAD_APPROVE_COMPANY_CREATE]
-attach      download on demand → POST files → note → associate to company [MRLOAD_APPROVE_FILES_UPLOAD, MRLOAD_APPROVE_FILE_NOTES_POST]
-unmigrate   delete attached notes from the ledger                          [MRLOAD_APPROVE_UNMIGRATE]
+walk           Drive API DFS (parents[], owners, createdTime, webViewLink) → library_hierarchy.csv
+bq-init        datasets + empty ledger tables (dbt sources resolve before step 6)
+bq-load        hierarchy → mrload_raw.library_hierarchy                       [MRLOAD_APPROVE_BQ_LOAD]
+dbt run/test   silver_library_company / _index / _deal_candidates / _parked / _orphans + cardinality tests
+review-export  operator queues + deal_decisions.csv template (offline)
+companies      company folder → HubSpot company (search by name, create)     [MRLOAD_APPROVE_COMPANY_CREATE]
+attach         download on demand → POST files → note → associate to company [MRLOAD_APPROVE_FILES_UPLOAD, MRLOAD_APPROVE_FILE_NOTES_POST]
+ledger-export  ledger → mrload_raw.{companies_resolved,files_uploaded,file_notes_posted,deals_created} → dbt build
+deals          pass 2: approved decisions → deal → company, note → deal      [MRLOAD_APPROVE_DEAL_CREATE]
+unmigrate      delete attached notes from the ledger                          [MRLOAD_APPROVE_UNMIGRATE]
 ```
 
 Orchestration: `ansible/playbook.yml` on localhost (Cloud Shell or a laptop);
@@ -111,8 +115,7 @@ GCS mirror is needed: binaries stream from Drive to HubSpot on demand); the
 
 ## 7. Deferred
 
-- Pass 2: deal indexing of `deal_candidate` PDFs (separate walk over
-  `silver_library_deal_candidates`).
+- Pass 2 automation beyond the decisions file (deal properties are operator-supplied per row).
 - Contacts: no contact level exists in the tree; contact association is not
   inferred.
 - Tradeshows (70): indexable with the same grammar, excluded from this pipeline.

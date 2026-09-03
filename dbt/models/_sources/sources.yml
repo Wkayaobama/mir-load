@@ -18,3 +18,16 @@ sources:
             description: "FK → node_key of the anchoring company folder (Library → Company N:1)"
           - name: parents_count
             description: "Number of Drive parents; > 1 is a DAG violation of the tree assumption"
+
+  - name: mrload_ledger
+    description: "Step 6 — runner ledger exported by `runner ledger-export` (HubSpot ids written back)"
+    schema: "{{ var('raw_dataset') }}"
+    tables:
+      - name: companies_resolved
+        description: "company_node_key → hs_company_id (search/create outcome)"
+      - name: files_uploaded
+        description: "legacy_library_id → hs_file_id (attach phase 1)"
+      - name: file_notes_posted
+        description: "legacy_library_id → hs_note_id (attach phase 2)"
+      - name: deals_created
+        description: "legacy_library_id → hs_deal_id (pass 2)"
