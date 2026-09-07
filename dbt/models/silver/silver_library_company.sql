@@ -19,10 +19,10 @@ with companies as (
 assets as (
     select
         company_node_key,
-        countif(not is_dir)                                   as asset_count,
-        countif(asset_class = 'deal_candidate')               as deal_candidate_count,
-        countif(asset_class = 'parked_for_review')            as parked_count,
-        countif(asset_class = 'shortcut')                     as shortcut_count
+        {{ countif('not is_dir') }}                            as asset_count,
+        {{ countif("asset_class = 'deal_candidate'") }}       as deal_candidate_count,
+        {{ countif("asset_class = 'parked_for_review'") }}    as parked_count,
+        {{ countif("asset_class = 'shortcut'") }}             as shortcut_count
     from {{ ref('stg_library_hierarchy') }}
     where company_node_key is not null
     group by company_node_key

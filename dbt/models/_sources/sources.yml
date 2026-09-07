@@ -7,6 +7,8 @@ sources:
     tables:
       - name: library_hierarchy
         description: "One row per walked Drive node: NodeKey/ParentKey/Depth + Drive metadata + classification"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_HIERARCHY_CSV', '../.mrload/library_hierarchy.csv') }}', header=true)"
         config:
           loaded_at_field: walked_at
         columns:
@@ -25,9 +27,17 @@ sources:
     tables:
       - name: companies_resolved
         description: "company_node_key → hs_company_id (search/create outcome)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/companies_resolved.csv', header=true, all_varchar=true)"
       - name: files_uploaded
         description: "legacy_library_id → hs_file_id (attach phase 1)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/files_uploaded.csv', header=true, all_varchar=true)"
       - name: file_notes_posted
         description: "legacy_library_id → hs_note_id (attach phase 2)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/file_notes_posted.csv', header=true, all_varchar=true)"
       - name: deals_created
         description: "legacy_library_id → hs_deal_id (pass 2)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/deals_created.csv', header=true, all_varchar=true)"

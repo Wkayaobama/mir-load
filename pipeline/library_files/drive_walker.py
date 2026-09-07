@@ -96,6 +96,12 @@ class ApiDriveLister:
 
     @classmethod
     def from_credentials(cls, credentials_path: Optional[str] = None) -> "ApiDriveLister":
+        import os
+
+        mock_base = os.environ.get("MRLOAD_DRIVE_API_BASE")
+        if mock_base:
+            return cls.from_api_base(mock_base)
+
         from googleapiclient.discovery import build  # lazy: optional dependency
 
         scopes = ["https://www.googleapis.com/auth/drive.readonly"]
@@ -110,6 +116,26 @@ class ApiDriveLister:
 
             creds, _ = google.auth.default(scopes=scopes)
         return cls(build("drive", "v3", credentials=creds, cache_discovery=False))
+
+    @classmethod
+    def from_api_base(cls, base_url: str) -> "ApiDriveLister":
+        """Real googleapiclient wired to an arbitrary Drive-v3-compatible base URL
+        (the e2e rehearsal's mock server). Uses the static discovery document
+        shipped with google-api-python-client, so no network is needed to build."""
+        import json
+        from pathlib import Path
+
+        import googleapiclient
+        from google.auth.credentials import AnonymousCredentials
+        from googleapiclient.discovery import build_from_document
+
+        doc_path = Path(googleapiclient.__file__).parent / "discovery_cache" / "documents" / "drive.v3.json"
+        doc = json.loads(doc_path.read_text(encoding="utf-8"))
+        root = base_url.rstrip("/") + "/"
+        doc["rootUrl"] = root
+        doc["mtlsRootUrl"] = root
+        doc["baseUrl"] = root + doc.get("servicePath", "drive/v3/").lstrip("/")
+        return cls(build_from_document(doc, credentials=AnonymousCredentials()))
 
     def get_file(self, file_id: str) -> DriveFile:
         raw = self._svc.files().get(

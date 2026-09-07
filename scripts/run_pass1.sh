@@ -32,11 +32,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 PY="${PYTHON:-python3}"
 RUNNER="$PY -m pipeline.library_files.runner"
-STATE=".mrload"
+STATE="${MRLOAD_STATE_DIR:-.mrload}"
 HIER="$STATE/library_hierarchy.csv"
 SILVER="$STATE/silver_preview.csv"
 REVIEW="$STATE/review"
 LEDGER="${MRLOAD_LEDGER_PATH:-$STATE/ledger.sqlite}"
+HS_BASE="${MRLOAD_HUBSPOT_API_BASE:-https://api.hubapi.com}"
 LOGS="$STATE/logs"
 mkdir -p "$STATE" "$LOGS"
 
@@ -70,7 +71,8 @@ logrun() {  # logrun <step> <cmd...>  — tee stdout+stderr to a log file
   local step="$1"; shift
   local log="$LOGS/$step-$(ts).log"
   echo "# $(date -u) :: $*" >"$log"
-  "$@" 2>&1 | tee -a "$log"
+  # stdout stays clean (callers capture JSON from it); stderr is shown and logged
+  "$@" 2> >(tee -a "$log" >&2) | tee -a "$log"
   return "${PIPESTATUS[0]}"
 }
 count_json() {  # count_json <file> <python-expr over d>
@@ -114,7 +116,7 @@ step_preflight() {
 
   say "0/preflight — HubSpot token (read-only probe)"
   if [[ -n "${HUBSPOT_SANDBOX_TOKEN:-}" ]]; then
-    local info; info=$(curl -sS -H "Authorization: Bearer $HUBSPOT_SANDBOX_TOKEN" https://api.hubapi.com/account-info/v3/details || true)
+    local info; info=$(curl -sS -H "Authorization: Bearer $HUBSPOT_SANDBOX_TOKEN" "$HS_BASE/account-info/v3/details" || true)
     local pid; pid=$($PY -c "import json,sys;print(json.loads(sys.argv[1]).get('portalId','?'))" "$info" 2>/dev/null || echo "?")
     [[ "$pid" != "?" ]] && ok "token valid for portal $pid  ← OPERATOR: confirm this is the SANDBOX (not 9201667 prod)" \
       || die "HubSpot token rejected: $info"
@@ -162,7 +164,7 @@ step_bq_load() {
 step_dbt() {
   say "2a+3a/dbt — silver build + the cardinality contract"
   need dbt "pip install dbt-bigquery"
-  ( cd dbt && logrun dbt-deps dbt deps --profiles-dir . --target "$DBT_TARGET" \
+  ( cd dbt && { [[ -d dbt_packages/dbt_utils ]] || logrun dbt-deps dbt deps --profiles-dir . --target "$DBT_TARGET"; } \
            && logrun dbt-run  dbt run  --profiles-dir . --target "$DBT_TARGET" \
            && logrun dbt-test dbt test --profiles-dir . --target "$DBT_TARGET" )
   echo

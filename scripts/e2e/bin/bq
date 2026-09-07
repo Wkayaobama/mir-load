@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""`bq` stub for the e2e rehearsal.
+
+Emulates the four sub-commands scripts/run_pass1.sh uses (ls, mk, show, load)
+and, for `load`, validates the CSV against the BigQuery schema JSON the way
+the real service would reject it: positional column count, REQUIRED
+non-empty, INT64 / BOOL / TIMESTAMP parse per row. State in $BQSTUB_STATE.
+"""
+import csv, json, os, re, shutil, sys
+from pathlib import Path
+
+STATE_PATH = Path(os.environ.get("BQSTUB_STATE", ".mrload/bqstub/state.json"))
+TS_RX = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:?\d{2})?$")
+
+
+def load_state():
+    if STATE_PATH.exists():
+        return json.loads(STATE_PATH.read_text())
+    return {"datasets": [], "tables": {}, "loads": [], "errors": []}
+
+
+def save_state(st):
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(st, indent=2))
+
+
+def die(msg, st=None):
+    print(f"BigQuery error in load operation: {msg}", file=sys.stderr)
+    if st is not None:
+        st["errors"].append(msg); save_state(st)
+    sys.exit(1)
+
+
+def check_value(v, field, rowno, pos):
+    t, mode = field["type"], field.get("mode", "NULLABLE")
+    if v == "":
+        if mode == "REQUIRED":
+            die(f"Error while reading data, error message: Required field {field['name']} (position {pos}) is missing at row {rowno}")
+        return
+    if t == "INT64":
+        try: int(v)
+        except ValueError: die(f"Error while reading data, error message: Could not parse '{v}' as INT64 for field {field['name']} (position {pos}) at row {rowno}")
+    elif t == "BOOL":
+        if v.lower() not in ("true", "false"):
+            die(f"Error while reading data, error message: Could not parse '{v}' as BOOL for field {field['name']} (position {pos}) at row {rowno}")
+    elif t == "TIMESTAMP":
+        if not TS_RX.match(v):
+            die(f"Error while reading data, error message: Could not parse '{v}' as TIMESTAMP for field {field['name']} (position {pos}) at row {rowno}")
+
+
+def main():
+    args = sys.argv[1:]
+    flags = [a for a in args if a.startswith("-")]
+    pos = [a for a in args if not a.startswith("-")]
+    if not pos:
+        print("usage: bq <command>"); sys.exit(2)
+    cmd, rest = pos[0], pos[1:]
+    st = load_state()
+
+    if cmd == "ls":
+        if rest:
+            for t in st["tables"]:
+                if t.startswith(rest[0] + "."):
+                    print(f"  {t.split('.',1)[1]}  TABLE")
+        else:
+            for d in st["datasets"]:
+                print(f"  {d}")
+        return
+    if cmd == "mk":
+        if "--dataset" in flags:
+            ds = rest[0]
+            if ds not in st["datasets"]:
+                st["datasets"].append(ds)
+            print(f"Dataset '{ds}' successfully created.")
+        elif "--table" in flags:
+            table, schema = rest[0], rest[1]
+            st["tables"][table] = {"schema": schema, "rows": 0}
+            print(f"Table '{table}' successfully created.")
+        save_state(st); return
+    if cmd == "show":
+        sys.exit(0 if rest[0] in st["tables"] else 1)
+    if cmd == "load":
+        table, src, schema_path = rest[0], rest[1], rest[2]
+        schema = json.loads(Path(schema_path).read_text())
+        skip = 1 if any(f.startswith("--skip_leading_rows") for f in flags) else 0
+        n = 0
+        with open(src, encoding="utf-8", newline="") as fp:
+            reader = csv.reader(fp)
+            for i, row in enumerate(reader):
+                if i < skip:
+                    continue
+                if len(row) != len(schema):
+                    die(f"Error while reading data, error message: CSV table encountered too many/few values: expected {len(schema)}, got {len(row)} at row {i+1}", st)
+                for p, (v, field) in enumerate(zip(row, schema)):
+                    check_value(v, field, i + 1, p)
+                n += 1
+        st["tables"][table] = {"schema": schema_path, "rows": n, "replace": "--replace" in flags}
+        st["loads"].append({"table": table, "rows": n, "src": src})
+        keep = STATE_PATH.parent / f"{table}.csv"
+        shutil.copyfile(src, keep)
+        save_state(st)
+        print("Upload complete."); print(f"Waiting on bqjob_mock ... (0s) Current status: DONE   [{n} rows → {table}]")
+        return
+    print(f"bq stub: unsupported command {cmd}", file=sys.stderr); sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,14 @@
 # mr-load dbt — silver layer over the walked Drive hierarchy
 
-Adapter: `dbt-bigquery`. Source: `mrload_raw.library_hierarchy` (walker output
-loaded by `python -m pipeline.library_files.runner bq-load`).
+Adapter: `dbt-bigquery` (targets `dev` = OAuth, `runner` = SA keyfile). Source:
+`mrload_raw.library_hierarchy` (walker output loaded by `runner bq-load`) plus
+the four ledger tables written back by `runner ledger-export`.
+
+A third target, `duckdb`, runs the identical models and tests over the CSV
+artefacts for the e2e rehearsal (`MRLOAD_DBT_TARGET=duckdb
+MRLOAD_DBT_CONTRACTS=false`). BigQuery-only functions go through
+`macros/dialect.sql` (`countif`, `regexp_contains`, `segments_match`) and
+column types through dbt's `type_*` macros, so no model carries dialect code.
 
 ```
 dbt deps

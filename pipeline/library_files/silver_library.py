@@ -135,7 +135,7 @@ class SilverIndexBuilder:
     def build(self, entries: Iterable) -> Iterator[dict]:
         self.stats = SilverStats()
         self._company_ids = {}
-        loaded_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f %z")
+        loaded_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         for node in self.walker.walk(entries):
             self.stats.total_nodes += 1
             row = self._row(node, loaded_at)

@@ -3,9 +3,7 @@ version: 2
 models:
   - name: silver_library_company
     description: "Company folders → HubSpot company objects (one row per folder)"
-    config:
-      contract:
-        enforced: true
+    # contract enforcement is configured in dbt_project.yml (env-toggled: BigQuery on, DuckDB rehearsal off)
     constraints:
       - type: primary_key
         columns: [company_node_key]

@@ -108,7 +108,7 @@ deals          pass 2: approved decisions → deal → company, note → deal   
 unmigrate      delete attached notes from the ledger                          [MRLOAD_APPROVE_UNMIGRATE]
 ```
 
-Orchestration: `scripts/run_pass1.sh` on localhost (Cloud Shell or a laptop);
+Orchestration: `scripts/run_pass1.sh` on localhost (Cloud Shell or a laptop); rehearsed end to end by `scripts/e2e_rehearsal.sh` (see `docs/REHEARSAL_REPORT.md`);
 every write gate defaults to DRY (Ansible removed 2026-09-07, logic kept in `ansible/README.md`). rclone is no longer on the critical path (no
 GCS mirror is needed: binaries stream from Drive to HubSpot on demand); the
 `index` sub-command keeps the rclone-manifest source as an offline fallback.

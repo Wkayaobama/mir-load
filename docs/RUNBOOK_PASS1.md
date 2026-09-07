@@ -244,6 +244,31 @@ parked PDFs only enter it by your edit of the decisions file.
 
 ---
 
+## Rehearsal — proving the sequence without credentials
+
+`scripts/e2e_rehearsal.sh` runs the whole scripted sequence (steps 0 → 7,
+`--yes`, no orchestrator) with the **real** code against local stand-ins for
+the three external systems, and cross-checks every artefact:
+
+| external system | stand-in | what is real |
+|---|---|---|
+| Drive v3 API | `tests/e2e/drive_mock.py` (tree modelled on the live Drive: segments, companies, PO/Billing/other PDFs, native Google docs, shortcut, orphan, `70 Tradeshows`) | `google-api-python-client` walker, pagination, exports, downloads |
+| HubSpot API | `tests/e2e/hubspot_mock.py` (search/create company, files, notes, v4 associations, deals; first upload answers 429) | `requests` client, retry/backoff, two-phase uploader, SQLite ledger |
+| BigQuery | `scripts/e2e/bin/bq` stub (positional + type validation of every load against the schema JSON) and **dbt on DuckDB** | the dbt models and all 34 tests (dialect shims in `dbt/macros/dialect.sql`) |
+
+```
+scripts/e2e_rehearsal.sh                 # clean tree  → .mrload/rehearsal/REPORT.md, 28 checks
+SCENARIO=dirty scripts/e2e_rehearsal.sh  # multi-parent file + duplicate company → STOP at the dbt gate
+MRLOAD_E2E=1 python -m pytest tests/e2e  # both, as a test
+```
+
+The report cross-checks walker CSV ↔ ledger ↔ HubSpot mock state ↔ bq stub ↔
+dbt `run_results.json` ↔ DuckDB silver tables, including the cardinality
+proof (every note lands on exactly its folder's company) and idempotency (a
+second attach run fires zero requests). What it cannot prove: Google/HubSpot
+authentication and quotas, BigQuery-only SQL behaviour outside the shimmed
+functions, and the Drive sharing step — those are what `preflight` checks live.
+
 ## Re-run / refresh semantics
 
 | you changed | re-run from |

@@ -83,7 +83,7 @@ class HierarchyWriter:
 
     def rows(self, entries: Iterable[ManifestEntry]) -> Iterator[dict]:
         self.stats = HierarchyStats()
-        walked_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f %z")
+        walked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         seen: set[str] = set()
         for node in self.walker.walk(entries):
             s = self.stats

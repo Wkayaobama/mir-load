@@ -39,6 +39,7 @@ class Settings:
             cache_dir=Path(os.environ.get("MRLOAD_CACHE_DIR", ".mrload/cache")),
             bq_project=os.environ.get("MRLOAD_BQ_PROJECT") or None,
             bq_dataset=os.environ.get("MRLOAD_BQ_DATASET", "mrload"),
+            api_base_url=os.environ.get("MRLOAD_HUBSPOT_API_BASE", "https://api.hubapi.com"),
         )
 
     def require_hubspot_token(self, token_var: str = "HUBSPOT_SANDBOX_TOKEN") -> str:

@@ -19,3 +19,8 @@ mr_load_bigquery:
       dataset: "{{ env_var('MRLOAD_BQ_DATASET', 'mrload') }}"
       location: "{{ env_var('MRLOAD_BQ_LOCATION', 'EU') }}"
       threads: 4
+    # e2e rehearsal: the same models + tests on DuckDB over the CSV artefacts
+    duckdb:
+      type: duckdb
+      path: "{{ env_var('MRLOAD_DUCKDB_PATH', '../.mrload/rehearsal.duckdb') }}"
+      threads: 1
