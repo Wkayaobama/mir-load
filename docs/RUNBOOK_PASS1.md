@@ -15,8 +15,8 @@ scripts/run_pass1.sh status   # ledger + artefact summary at any time
 ```
 
 Where to run it: Cloud Shell (gcloud/bq preauthenticated, `pip install -r
-requirements.txt`, `pip install ansible-core` optional) or a laptop with the
-gcloud SDK. The container that produced this repo cannot open port 22 and holds
+requirements.txt`) or a laptop with the gcloud SDK. There is no second
+orchestrator: the script is the execution surface (see `ansible/README.md`). The container that produced this repo cannot open port 22 and holds
 no credentials, so nothing below was executed live there; every command was
 smoke-tested offline against fakes and the dbt project parses clean.
 

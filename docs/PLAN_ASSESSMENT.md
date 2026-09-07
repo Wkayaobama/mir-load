@@ -4,7 +4,8 @@
 > was amended: the Drive API depth-first walk (`runner walk`) replaced rclone as
 > the bronze source, dbt-bigquery became the silver/constraint layer
 > (`dbt/`), the GCS mirror was dropped (assets stream from Drive to HubSpot on
-> demand), and orchestration moved to `ansible/playbook.yml`. Scope narrowed to
+> demand), and orchestration is `scripts/run_pass1.sh` (Ansible tried and
+> removed 2026-09-07, see `ansible/README.md`). Scope narrowed to
 > the 30 Sales domain; tradeshows deferred. See `docs/INDEX_STRUCTURE.md`.
 > The rclone runbook below is retained as the optional mirror path only.
 
