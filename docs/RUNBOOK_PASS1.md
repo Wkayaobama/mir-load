@@ -14,9 +14,10 @@ scripts/run_pass1.sh all      # pass 1 end-to-end with a checkpoint before each 
 scripts/run_pass1.sh status   # ledger + artefact summary at any time
 ```
 
-Where to run it: Cloud Shell (gcloud/bq preauthenticated, `pip install -r
-requirements.txt`) or a laptop with the gcloud SDK. There is no second
-orchestrator: the script is the execution surface (see `ansible/README.md`). The container that produced this repo cannot open port 22 and holds
+Where to run it: any Ubuntu bash — WSL2, Docker, Cloud Shell or a GCE VM over
+IAP — see `docs/WEZTERM_UBUNTU.md` for getting that prompt in WezTerm and
+`scripts/bootstrap_ubuntu.sh` for the one-shot machine setup. There is no
+second orchestrator: the script is the execution surface (see `ansible/README.md`). The container that produced this repo cannot open port 22 and holds
 no credentials, so nothing below was executed live there; every command was
 smoke-tested offline against fakes and the dbt project parses clean.
 
