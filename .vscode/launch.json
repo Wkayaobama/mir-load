@@ -1,0 +1,285 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "runner \u25b8 walk (LIVE Drive, depth 1 = the preflight probe)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "walk",
+        "--max-depth",
+        "1",
+        "--hierarchy-out",
+        ".mrload/debug/probe.csv"
+      ]
+    },
+    {
+      "name": "runner \u25b8 walk (LIVE Drive, full)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "walk",
+        "--hierarchy-out",
+        ".mrload/library_hierarchy.csv",
+        "--silver-preview-out",
+        ".mrload/silver_preview.csv"
+      ]
+    },
+    {
+      "name": "runner \u25b8 index (OFFLINE, fixture manifest)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "index",
+        "--manifest",
+        "tests/fixtures/manifest_sample.json",
+        "--hierarchy-out",
+        ".mrload/debug/library_hierarchy.csv",
+        "--silver-preview-out",
+        ".mrload/debug/silver_preview.csv",
+        "--path-prefix",
+        "30 Sales",
+        "--root-name",
+        "20 opportunities and customer data"
+      ]
+    },
+    {
+      "name": "runner \u25b8 review-export",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "review-export",
+        "--hierarchy",
+        ".mrload/library_hierarchy.csv",
+        "--out-dir",
+        ".mrload/review"
+      ]
+    },
+    {
+      "name": "runner \u25b8 companies (DRY, real token from .env)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "companies",
+        "--hierarchy",
+        ".mrload/library_hierarchy.csv"
+      ]
+    },
+    {
+      "name": "runner \u25b8 attach (DRY, real token from .env)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "attach",
+        "--hierarchy",
+        ".mrload/library_hierarchy.csv"
+      ]
+    },
+    {
+      "name": "runner \u25b8 ledger-export (DRY)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "ledger-export",
+        "--dataset",
+        "mrload_raw"
+      ]
+    },
+    {
+      "name": "runner \u25b8 deals (DRY, from deal_decisions.csv)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "args": [
+        "deals",
+        "--decisions",
+        ".mrload/review/deal_decisions.csv"
+      ]
+    },
+    {
+      "name": "mock \u25b8 Drive server :8701",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "program": "${workspaceFolder}/tests/e2e/drive_mock.py",
+      "args": [
+        "--port",
+        "8701",
+        "--scenario",
+        "clean"
+      ]
+    },
+    {
+      "name": "mock \u25b8 HubSpot server :8702 (429 once)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "program": "${workspaceFolder}/tests/e2e/hubspot_mock.py",
+      "args": [
+        "--port",
+        "8702",
+        "--fail-once",
+        "upload"
+      ]
+    },
+    {
+      "name": "runner \u25b8 walk (against Drive mock)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "env": {
+        "MRLOAD_DRIVE_API_BASE": "http://127.0.0.1:8701",
+        "MRLOAD_HUBSPOT_API_BASE": "http://127.0.0.1:8702",
+        "HUBSPOT_SANDBOX_TOKEN": "mock-sandbox-token",
+        "GOOGLE_APPLICATION_CREDENTIALS": "",
+        "MRLOAD_STATE_DIR": ".mrload/debug",
+        "MRLOAD_LEDGER_PATH": ".mrload/debug/ledger.sqlite",
+        "MRLOAD_CACHE_DIR": ".mrload/debug/cache",
+        "NO_PROXY": "127.0.0.1,localhost"
+      },
+      "args": [
+        "walk",
+        "--hierarchy-out",
+        ".mrload/debug/library_hierarchy.csv",
+        "--silver-preview-out",
+        ".mrload/debug/silver_preview.csv"
+      ]
+    },
+    {
+      "name": "runner \u25b8 companies LIVE (against HubSpot mock)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "env": {
+        "MRLOAD_DRIVE_API_BASE": "http://127.0.0.1:8701",
+        "MRLOAD_HUBSPOT_API_BASE": "http://127.0.0.1:8702",
+        "HUBSPOT_SANDBOX_TOKEN": "mock-sandbox-token",
+        "GOOGLE_APPLICATION_CREDENTIALS": "",
+        "MRLOAD_STATE_DIR": ".mrload/debug",
+        "MRLOAD_LEDGER_PATH": ".mrload/debug/ledger.sqlite",
+        "MRLOAD_CACHE_DIR": ".mrload/debug/cache",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "MRLOAD_APPROVE_COMPANY_CREATE": "1"
+      },
+      "args": [
+        "companies",
+        "--hierarchy",
+        ".mrload/debug/library_hierarchy.csv"
+      ]
+    },
+    {
+      "name": "runner \u25b8 attach LIVE (against both mocks)",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pipeline.library_files.runner",
+      "env": {
+        "MRLOAD_DRIVE_API_BASE": "http://127.0.0.1:8701",
+        "MRLOAD_HUBSPOT_API_BASE": "http://127.0.0.1:8702",
+        "HUBSPOT_SANDBOX_TOKEN": "mock-sandbox-token",
+        "GOOGLE_APPLICATION_CREDENTIALS": "",
+        "MRLOAD_STATE_DIR": ".mrload/debug",
+        "MRLOAD_LEDGER_PATH": ".mrload/debug/ledger.sqlite",
+        "MRLOAD_CACHE_DIR": ".mrload/debug/cache",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "MRLOAD_APPROVE_FILES_UPLOAD": "1",
+        "MRLOAD_APPROVE_FILE_NOTES_POST": "1"
+      },
+      "args": [
+        "attach",
+        "--hierarchy",
+        ".mrload/debug/library_hierarchy.csv"
+      ]
+    },
+    {
+      "name": "pytest \u25b8 current file",
+      "type": "debugpy",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "envFile": "${workspaceFolder}/.env",
+      "module": "pytest",
+      "args": [
+        "${file}",
+        "-q"
+      ]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "debug \u25b8 mocks + walk",
+      "configurations": [
+        "mock \u25b8 Drive server :8701",
+        "mock \u25b8 HubSpot server :8702 (429 once)",
+        "runner \u25b8 walk (against Drive mock)"
+      ],
+      "stopAll": true
+    },
+    {
+      "name": "debug \u25b8 mocks + attach LIVE",
+      "configurations": [
+        "mock \u25b8 Drive server :8701",
+        "mock \u25b8 HubSpot server :8702 (429 once)",
+        "runner \u25b8 attach LIVE (against both mocks)"
+      ],
+      "stopAll": true
+    }
+  ]
+}

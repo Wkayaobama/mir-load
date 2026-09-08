@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "ms-vscode-remote.remote-containers",
+    "ms-vscode-remote.remote-wsl",
+    "ms-python.python",
+    "ms-python.debugpy",
+    "qwtel.sqlite-viewer",
+    "mechatroner.rainbow-csv",
+    "innoverio.vscode-dbt-power-user",
+    "redhat.vscode-yaml",
+    "timonwong.shellcheck"
+  ]
+}

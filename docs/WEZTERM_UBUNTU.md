@@ -12,6 +12,7 @@ and the e2e rehearsal, and leaves you at the credentials step.
 | B. Docker Ubuntu | any OS with Docker | macOS/Linux, or a clean room on Windows |
 | C. Cloud Shell | Google-hosted, preauthenticated | zero setup, interactive runs only (40 min idle cut) |
 | D. GCE runner VM over IAP | your project | long runs, or later scheduling |
+| **IDE** | VS Code Dev Container / WSL, PyCharm | breakpoints, one-click steps, artefact viewers — `docs/IDE_VSCODE.md` |
 
 ## 0. Wire the WezTerm module (once)
 

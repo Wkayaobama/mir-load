@@ -15,8 +15,10 @@ scripts/run_pass1.sh status   # ledger + artefact summary at any time
 ```
 
 Where to run it: any Ubuntu bash — WSL2, Docker, Cloud Shell or a GCE VM over
-IAP — see `docs/WEZTERM_UBUNTU.md` for getting that prompt in WezTerm and
-`scripts/bootstrap_ubuntu.sh` for the one-shot machine setup. There is no
+IAP — see `docs/WEZTERM_UBUNTU.md` for getting that prompt in WezTerm,
+`docs/IDE_VSCODE.md` for the same environment inside VS Code (Dev Container,
+tasks per step, debug configurations), and `scripts/bootstrap_ubuntu.sh` for
+the one-shot machine setup. There is no
 second orchestrator: the script is the execution surface (see `ansible/README.md`). The container that produced this repo cannot open port 22 and holds
 no credentials, so nothing below was executed live there; every command was
 smoke-tested offline against fakes and the dbt project parses clean.

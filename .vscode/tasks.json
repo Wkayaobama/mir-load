@@ -1,0 +1,371 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "mr-load: gauth (Google login for Drive + BigQuery, verified)",
+      "type": "shell",
+      "command": "bash scripts/gauth.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "gcloud auth login --enable-gdrive-access --update-adc \u2192 quota project \u2192 APIs \u2192 live Drive check"
+    },
+    {
+      "label": "mr-load: bootstrap this machine",
+      "type": "shell",
+      "command": "bash scripts/bootstrap_ubuntu.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "apt + gcloud + venv + unit tests + e2e rehearsal (Ubuntu only, never sudo)"
+    },
+    {
+      "label": "mr-load: unit tests",
+      "type": "shell",
+      "command": "${config:python.defaultInterpreterPath} -m pytest tests -q --ignore=tests/e2e",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "mr-load: e2e rehearsal (clean, mocks, \u224830 s)",
+      "type": "shell",
+      "command": "bash scripts/e2e_rehearsal.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "",
+      "group": "test"
+    },
+    {
+      "label": "mr-load: e2e rehearsal (dirty \u2192 must stop at dbt gate)",
+      "type": "shell",
+      "command": "SCENARIO=dirty bash scripts/e2e_rehearsal.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "",
+      "group": "test"
+    },
+    {
+      "label": "mr-load: status pane",
+      "type": "shell",
+      "command": "bash scripts/dev/watch_status.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "ledger counts + latest step log, refresh 5 s"
+    },
+    {
+      "label": "mr-load: step preflight",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh preflight",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step walk",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh walk",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step bq-init",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh bq-init",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step bq-load",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh bq-load",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "live gates ask for YES in this terminal"
+    },
+    {
+      "label": "mr-load: step dbt",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh dbt",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step review",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh review",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step companies-dry",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh companies-dry",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step companies-live",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh companies-live",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "live gates ask for YES in this terminal"
+    },
+    {
+      "label": "mr-load: step attach-dry",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh attach-dry",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step attach-upload",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh attach-upload",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "live gates ask for YES in this terminal"
+    },
+    {
+      "label": "mr-load: step attach-notes",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh attach-notes",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "live gates ask for YES in this terminal"
+    },
+    {
+      "label": "mr-load: step ledger-export",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh ledger-export",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "live gates ask for YES in this terminal"
+    },
+    {
+      "label": "mr-load: step deals-dry",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh deals-dry",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step deals-live",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh deals-live",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "live gates ask for YES in this terminal"
+    },
+    {
+      "label": "mr-load: step status",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh status",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: step unmigrate",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh unmigrate",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "live gates ask for YES in this terminal"
+    },
+    {
+      "label": "mr-load: dbt parse (BigQuery target)",
+      "type": "shell",
+      "command": "cd dbt && dbt parse --profiles-dir . --target dev",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: dbt build (BigQuery target)",
+      "type": "shell",
+      "command": "cd dbt && dbt build --profiles-dir . --target dev",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    }
+  ]
+}

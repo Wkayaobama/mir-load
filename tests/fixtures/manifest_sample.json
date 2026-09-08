@@ -1,0 +1,91 @@
+[
+ {
+  "Path": "Quantum",
+  "Name": "Quantum",
+  "IsDir": true,
+  "ID": "seg-q",
+  "MimeType": "inode/directory",
+  "ModTime": "2026-08-05T13:13:09Z"
+ },
+ {
+  "Path": "Quantum/Toshiba",
+  "Name": "Toshiba",
+  "IsDir": true,
+  "ID": "co-toshiba",
+  "MimeType": "inode/directory",
+  "ModTime": "2026-04-14T09:40:15Z"
+ },
+ {
+  "Path": "Quantum/Toshiba/PO_4711.pdf",
+  "Name": "PO_4711.pdf",
+  "IsDir": false,
+  "ID": "f-po",
+  "MimeType": "application/pdf",
+  "Size": 10,
+  "ModTime": "2026-06-01T10:00:00Z",
+  "Hashes": {
+   "md5": "a1"
+  }
+ },
+ {
+  "Path": "Quantum/Toshiba/spec.pdf",
+  "Name": "spec.pdf",
+  "IsDir": false,
+  "ID": "f-spec",
+  "MimeType": "application/pdf",
+  "Size": 10,
+  "ModTime": "2026-06-02T10:00:00Z"
+ },
+ {
+  "Path": "Quantum/Toshiba/Roadmap",
+  "Name": "Roadmap",
+  "IsDir": false,
+  "ID": "f-slides",
+  "MimeType": "application/vnd.google-apps.presentation",
+  "Size": -1,
+  "ModTime": "2026-06-03T10:00:00Z"
+ },
+ {
+  "Path": "Quantum/Thorlabs",
+  "Name": "Thorlabs",
+  "IsDir": true,
+  "ID": "co-thorlabs",
+  "MimeType": "inode/directory",
+  "ModTime": "2026-06-29T11:38:33Z"
+ },
+ {
+  "Path": "Quantum/Thorlabs/Quotation AN1.pdf",
+  "Name": "Quotation AN1.pdf",
+  "IsDir": false,
+  "ID": "f-q",
+  "MimeType": "application/pdf",
+  "Size": 10,
+  "ModTime": "2026-06-04T10:00:00Z"
+ },
+ {
+  "Path": "Quantum/251226 Miraex Lead Opportunities.xlsx",
+  "Name": "251226 Miraex Lead Opportunities.xlsx",
+  "IsDir": false,
+  "ID": "f-orphan",
+  "MimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "Size": 10,
+  "ModTime": "2025-12-26T10:55:44Z"
+ },
+ {
+  "Path": "70 Tradeshows",
+  "Name": "70 Tradeshows",
+  "IsDir": true,
+  "ID": "seg-70",
+  "MimeType": "inode/directory",
+  "ModTime": "2021-10-05T09:01:38Z"
+ },
+ {
+  "Path": "70 Tradeshows/booth.pdf",
+  "Name": "booth.pdf",
+  "IsDir": false,
+  "ID": "f-booth",
+  "MimeType": "application/pdf",
+  "Size": 10,
+  "ModTime": "2021-10-19T07:59:09Z"
+ }
+]
