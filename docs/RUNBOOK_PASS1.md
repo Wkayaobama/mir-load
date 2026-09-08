@@ -46,9 +46,14 @@ in a shared drive, so the SA must be a member of that shared drive or the
 folder must be shared explicitly. Without this, `walk` returns **0 nodes and no
 error** — `preflight` detects exactly that.
 
-Alternative for a laptop session (no key file):
-`gcloud auth application-default login --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform`
-and leave `GOOGLE_APPLICATION_CREDENTIALS` unset.
+Alternative for a laptop session (no key file, recommended when the Drive is
+your own account): leave `GOOGLE_APPLICATION_CREDENTIALS` unset and run
+`scripts/gauth.sh`. It performs `gcloud auth login --enable-gdrive-access
+--update-adc`, sets the ADC quota project to `MRLOAD_BQ_PROJECT`, enables the
+Drive API there, and verifies the scope root is readable. Do not use
+`gcloud auth application-default login --scopes=…drive…`: Google rejects
+Drive scopes for gcloud's built-in client on that path (documented: it needs
+your own OAuth client via `--client-id-file`).
 
 ### A2. HubSpot private app — sandbox first
 

@@ -114,7 +114,11 @@ class ApiDriveLister:
         else:
             import google.auth
 
-            creds, _ = google.auth.default(scopes=scopes)
+            # User ADC (gcloud auth login --enable-gdrive-access --update-adc) needs a
+            # quota project for non-Cloud APIs such as Drive; without it the first
+            # call fails with a PERMISSION_DENIED "requires a quota project" error.
+            quota_project = os.environ.get("MRLOAD_BQ_PROJECT") or None
+            creds, _ = google.auth.default(scopes=scopes, quota_project_id=quota_project)
         return cls(build("drive", "v3", credentials=creds, cache_discovery=False))
 
     @classmethod

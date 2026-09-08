@@ -110,8 +110,7 @@ cat <<EOF
 Next, in this same shell:
   source $VENV/bin/activate
   gcloud init                                   # choose the BigQuery project
-  gcloud auth application-default login --no-launch-browser \\
-    --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform
+  scripts/gauth.sh                              # Google auth for Drive + BigQuery (verified sequence), then checks Drive access
   \$EDITOR .env                                  # MRLOAD_BQ_PROJECT, HUBSPOT_SANDBOX_TOKEN
   scripts/run_pass1.sh preflight
 EOF

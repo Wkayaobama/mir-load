@@ -125,20 +125,25 @@ Host mrload-vm
   ProxyCommand gcloud compute start-iap-tunnel %h 22 --listen-on-stdin --zone=<ZONE> --project=<PROJECT>
 ```
 On the VM: `git clone … && bash scripts/bootstrap_ubuntu.sh`. BigQuery works
-through the attached service account; for Drive either run
-`gcloud auth application-default login --no-launch-browser --scopes=…drive.readonly`
-as yourself, or share the scope root with the VM's service account.
+through the attached service account; for Drive either run `scripts/gauth.sh`
+as yourself (user ADC with Drive access), or share the scope root with the
+VM's service account and point `GOOGLE_APPLICATION_CREDENTIALS` at its key.
 
 ## After the bootstrap (all options)
 
 ```bash
 source .venv/bin/activate
 gcloud init
-gcloud auth application-default login --no-launch-browser \
-  --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform
+scripts/gauth.sh                              # gcloud auth login --enable-gdrive-access --update-adc + quota project + Drive API + live check
 $EDITOR .env                                    # MRLOAD_BQ_PROJECT, HUBSPOT_SANDBOX_TOKEN (sandbox first)
 scripts/run_pass1.sh preflight                  # then the sequence in docs/RUNBOOK_PASS1.md
 ```
-`--no-launch-browser` prints a URL to open on your own browser; paste the code
-back. Second pane (Ctrl+Shift+S) shows the ledger counts and the latest step
-log while the first pane runs the steps.
+`gauth.sh` prints a URL to open in your own browser and asks for the code back
+(`GAUTH_BROWSER=1 scripts/gauth.sh` opens it directly on a laptop). It does NOT
+use `application-default login --scopes=…drive…`: Google rejects Drive scopes
+for gcloud's built-in OAuth client on that path (the "permission error" at the
+consent screen). It runs the documented alternative, sets the quota project
+user credentials need for the Drive API, enables the API, then proves the ADC
+identity can read the scope root before you spend time on `preflight`.
+Second pane (Ctrl+Shift+S) shows the ledger counts and the latest step log
+while the first pane runs the steps.

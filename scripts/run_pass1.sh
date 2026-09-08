@@ -42,11 +42,24 @@ LOGS="$STATE/logs"
 mkdir -p "$STATE" "$LOGS"
 
 # ── env layering (process env > .env > .env.mrload) ──────────────────────────
+# Files never override variables already present in the process environment,
+# so callers (the e2e rehearsal, CI, a one-off `VAR=x scripts/run_pass1.sh`)
+# always win over an operator's .env.
 _load_env() {
-  local f
-  for f in "$REPO_ROOT/../.env.mrload" "$REPO_ROOT/.env.mrload" "$REPO_ROOT/.env"; do
-    if [[ -f "$f" ]]; then set -a; # shellcheck disable=SC1090
-      source "$f"; set +a; fi
+  local f line key val
+  for f in "$REPO_ROOT/.env" "$REPO_ROOT/.env.mrload" "$REPO_ROOT/../.env.mrload"; do
+    [[ -f "$f" ]] || continue
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%%#*}"; line="${line#"${line%%[![:space:]]*}"}"; line="${line%"${line##*[![:space:]]}"}"
+      [[ "$line" == *=* ]] || continue
+      key="${line%%=*}"; key="${key#export }"; key="${key%"${key##*[![:space:]]}"}"
+      [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+      [[ -n "${!key+x}" ]] && continue
+      val="${line#*=}"; val="${val#"${val%%[![:space:]]*}"}"
+      [[ "$val" == \"*\" && "$val" == *\" ]] && val="${val:1:${#val}-2}"
+      [[ "$val" == \'*\' && "$val" == *\' ]] && val="${val:1:${#val}-2}"
+      export "$key=$val"
+    done < "$f"
   done
 }
 _load_env
@@ -111,7 +124,12 @@ step_preflight() {
     [[ "$n" -gt 0 ]] && ok "scope root visible: $n depth-1 nodes (segments)" \
       || die "walk returned 0 nodes — the SILENT-FAILURE step: share the root with the SA email, or check drive_id in context/cards/library.yaml"
   else
-    die "walk failed — Drive API enabled on the SA's project? credentials valid?"
+    die "walk failed. Read the error above:
+   'requires a quota project' / PERMISSION_DENIED → gcloud auth application-default set-quota-project \$MRLOAD_BQ_PROJECT
+                                                   && gcloud services enable drive.googleapis.com
+   'invalid_scope' / 'Access blocked' / insufficient scopes → gcloud auth login --enable-gdrive-access --update-adc
+   'accessNotConfigured' → gcloud services enable drive.googleapis.com --project=\$MRLOAD_BQ_PROJECT
+   Or run the whole sequence once:  scripts/gauth.sh"
   fi
 
   say "0/preflight — HubSpot token (read-only probe)"

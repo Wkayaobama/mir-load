@@ -21,9 +21,9 @@ for i in $(seq 1 30); do
 done
 
 export NO_PROXY="127.0.0.1,localhost,${NO_PROXY:-}" no_proxy="127.0.0.1,localhost"
-unset GOOGLE_APPLICATION_CREDENTIALS
+export GOOGLE_APPLICATION_CREDENTIALS=""          # empty (not unset) so an operator .env cannot re-set it
 export MRLOAD_DRIVE_API_BASE="http://127.0.0.1:$P1" MRLOAD_HUBSPOT_API_BASE="http://127.0.0.1:$P2"
-export HUBSPOT_SANDBOX_TOKEN="mock-sandbox-token" MRLOAD_BQ_PROJECT="rehearsal-project"
+export HUBSPOT_SANDBOX_TOKEN="mock-sandbox-token" MRLOAD_BQ_PROJECT="rehearsal-project" MRLOAD_BQ_RAW_DATASET="mrload_raw" MRLOAD_BQ_DATASET="mrload"
 export MRLOAD_STATE_DIR="$R" MRLOAD_LEDGER_PATH="$R/ledger.sqlite" MRLOAD_CACHE_DIR="$R/cache"
 export BQSTUB_STATE="$R/bqstub/state.json" PATH="$REPO_ROOT/scripts/e2e/bin:$PATH"
 export MRLOAD_DBT_TARGET=duckdb MRLOAD_DBT_CONTRACTS=false MRLOAD_DUCKDB_PATH="$R/rehearsal.duckdb"
