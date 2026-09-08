@@ -1,0 +1,34 @@
+# Line endings: everything executable or parsed by Unix tools is LF, always,
+# regardless of core.autocrlf on the checkout machine (Git for Windows defaults
+# to autocrlf=true, which turns bash scripts into "\r: command not found").
+* text=auto
+
+*.sh            text eol=lf
+*.bash          text eol=lf
+*.py            text eol=lf
+*.lua           text eol=lf
+*.sql           text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.json          text eol=lf
+*.toml          text eol=lf
+*.cfg           text eol=lf
+*.ini           text eol=lf
+*.txt           text eol=lf
+*.md            text eol=lf
+*.csv           text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+.env.mrload.example text eol=lf
+Dockerfile      text eol=lf
+scripts/**      text eol=lf
+scripts/e2e/bin/* text eol=lf
+
+# binaries (none tracked today; keep Git from touching them if added)
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.gds  binary
+*.zip  binary
+*.sqlite binary
+*.duckdb binary

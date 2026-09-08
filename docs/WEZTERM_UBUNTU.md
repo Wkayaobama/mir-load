@@ -34,6 +34,23 @@ You get: **Ctrl+Shift+L** launcher with the `mr-load ▸ …` entries (local she
 bootstrap, status pane, Docker, Cloud Shell, VM), **Ctrl+Shift+S** to split a
 live status pane to the right, and on Windows every new tab opens in WSL Ubuntu.
 
+## Windows checkouts: line endings
+
+Git for Windows defaults to `core.autocrlf=true`, which rewrites every text
+file to CRLF on checkout; a bash script then dies on `set -euo pipefail\r`.
+The repo now ships a `.gitattributes` that pins `eol=lf` for scripts and all
+parsed text, so **fresh clones are correct on any machine**. An existing clone
+made before it must be re-checked-out once, from Git Bash inside the repo:
+
+```bash
+git pull
+git add --renormalize . && git rm -r -q --cached . && git reset -q --hard   # re-apply .gitattributes
+git ls-files -z | xargs -0 grep -lI $'\r' || echo "clean"                    # must print: clean
+```
+`scripts/ubuntu_shell.sh` refuses to start the container while `scripts/` is
+CRLF, and the Dockerfile strips `\r` from the bootstrap before running it, so
+the failure you would otherwise get inside Docker is caught on the host side.
+
 ## A. WSL2 Ubuntu (Windows)
 
 ```powershell
