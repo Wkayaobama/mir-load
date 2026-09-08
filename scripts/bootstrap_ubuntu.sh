@@ -16,10 +16,30 @@ REMOTE="${MRLOAD_REMOTE:-https://github.com/Wkayaobama/mir-load.git}"
 SYSTEM_ONLY=0; REHEARSAL=1
 for a in "$@"; do case "$a" in --system-only) SYSTEM_ONLY=1;; --no-rehearsal) REHEARSAL=0;; esac; done
 
-SUDO=""; [[ $EUID -ne 0 ]] && SUDO="sudo"
-export DEBIAN_FRONTEND=noninteractive
 say() { printf '\n\033[1;36m▶ %s\033[0m\n' "$*"; }
 ok()  { printf '\033[1;32m✔ %s\033[0m\n' "$*"; }
+die() { printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; exit 2; }
+
+# ── guards: this script runs INSIDE Ubuntu, as your normal user ──────────────
+case "$(uname -s)" in
+  Linux) ;;
+  MINGW*|MSYS*|CYGWIN*)
+    die "You are in Git Bash on Windows, not in Ubuntu. Open an Ubuntu shell first:
+     Docker :  scripts/ubuntu_shell.sh          (then, inside:  bash scripts/bootstrap_ubuntu.sh)
+     WSL    :  wsl -d Ubuntu-24.04             (then:           bash scripts/bootstrap_ubuntu.sh)
+   Never prefix it with sudo — Windows' sudo.exe is unrelated and the script elevates apt itself." ;;
+  Darwin) die "macOS: run scripts/ubuntu_shell.sh (Docker) and then, inside the container, bash scripts/bootstrap_ubuntu.sh" ;;
+esac
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  die "Do not run this with sudo: the venv and .mrload/ would become root-owned. Run:  bash scripts/bootstrap_ubuntu.sh  (apt is elevated internally)"
+fi
+[[ -r /etc/os-release ]] && . /etc/os-release
+case "${ID:-}${ID_LIKE:-}" in *ubuntu*|*debian*) ;; *) die "Not an Ubuntu/Debian system (${PRETTY_NAME:-unknown}) — this bootstrap uses apt." ;; esac
+
+SUDO=""
+if [[ $EUID -ne 0 ]]; then command -v sudo >/dev/null || die "sudo missing and not root — install sudo or run as root"; SUDO="sudo"; fi
+export DEBIAN_FRONTEND=noninteractive
+VENV="${MRLOAD_VENV:-.venv}"
 
 # ── where am I ────────────────────────────────────────────────────────────────
 ENV_KIND="ubuntu"
@@ -51,6 +71,7 @@ fi
 [[ $SYSTEM_ONLY -eq 1 ]] && { ok "system-only bootstrap done"; exit 0; }
 
 # ── repository ────────────────────────────────────────────────────────────────
+git config --global --add safe.directory '*' 2>/dev/null || true   # bind-mounted checkouts (Docker) are owned by another uid
 if git rev-parse --show-toplevel >/dev/null 2>&1 && [[ -f "$(git rev-parse --show-toplevel)/context/cards/library.yaml" ]]; then
   REPO_ROOT="$(git rev-parse --show-toplevel)"
 else
@@ -63,9 +84,9 @@ ok "repo $REPO_ROOT @ $(git rev-parse --short HEAD) ($BRANCH)"
 
 # ── python env ────────────────────────────────────────────────────────────────
 say "virtualenv + requirements-dev"
-[[ -d .venv ]] || python3 -m venv .venv
+[[ -d "$VENV" ]] || python3 -m venv "$VENV"
 # shellcheck disable=SC1091
-source .venv/bin/activate
+source "$VENV/bin/activate"
 pip install -q --upgrade pip
 pip install -q -r requirements-dev.txt
 ok "venv ready: dbt $(dbt --version 2>/dev/null | grep -oE 'installed:\s*\S+' | head -1 | awk '{print $2}')"
@@ -87,7 +108,7 @@ fi
 cat <<EOF
 
 Next, in this same shell:
-  source .venv/bin/activate
+  source $VENV/bin/activate
   gcloud init                                   # choose the BigQuery project
   gcloud auth application-default login --no-launch-browser \\
     --scopes=https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/cloud-platform

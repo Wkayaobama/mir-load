@@ -60,21 +60,37 @@ Open WezTerm → the default domain is now WSL → in that bash:
 ```bash
 git clone https://github.com/Wkayaobama/mir-load.git ~/mir-load && cd ~/mir-load
 git checkout claude/mr-load-library-system-dphpbj
-bash scripts/bootstrap_ubuntu.sh
+bash scripts/bootstrap_ubuntu.sh           # NOT `sudo bash …` — apt will prompt for your WSL password itself
 ```
 Keep the clone on the Linux side (`~/mir-load`, not `/mnt/c/...`): `.mrload/`
 holds the ledger and cache and WSL is 10× slower on NTFS paths.
 
-## B. Docker Ubuntu (macOS, Linux, Windows)
+## "Sudo is disabled on this machine" — you are not in Ubuntu yet
+
+That sentence comes from **Windows 11's own `sudo.exe`**: it means the command
+ran in Git Bash (or PowerShell) on Windows. `scripts/bootstrap_ubuntu.sh` is an
+Ubuntu script; it refuses to run there and tells you which shell to open.
+Two rules, whichever option you pick:
+
+1. run it **inside** Ubuntu (Docker container, WSL tab, VM, Cloud Shell);
+2. run it **without** `sudo` — it elevates `apt` internally and everything else
+   (venv, `.mrload/`) must stay owned by you.
+
+## B. Docker Ubuntu (macOS, Linux, Windows) — Git Bash → Docker Desktop → Ubuntu
 
 ```bash
-git clone https://github.com/Wkayaobama/mir-load.git && cd mir-load
+# Git Bash (Windows) or any bash on macOS/Linux, inside the repo checkout
 git checkout claude/mr-load-library-system-dphpbj
-scripts/ubuntu_shell.sh                # builds scripts/dev/Dockerfile once, mounts the repo at /work
-# inside the container:
-bash scripts/bootstrap_ubuntu.sh       # system part is already baked in; creates venv, runs tests + rehearsal
-gcloud auth login --no-launch-browser  # credentials persist in the `mrload-gcloud` volume
+scripts/ubuntu_shell.sh                  # builds the image once (Ubuntu 24.04 + gcloud/bq + venv at /opt/venv), opens bash
+                                         #   "input device is not a TTY" → winpty scripts/ubuntu_shell.sh
+# ── now the prompt is root@…:/work, INSIDE Ubuntu ──
+bash scripts/bootstrap_ubuntu.sh         # no sudo: system + venv already baked, so it runs tests + rehearsal + creates .env
+gcloud auth login --no-launch-browser    # credentials persist in the `mrload-gcloud` volume across containers
 ```
+The repo is bind-mounted at `/work`: edits on Windows are visible inside, and
+`.mrload/` (ledger, logs, review queues) lands in your checkout. The venv lives
+in the image (`/opt/venv`, already on `PATH`) so it is fast and survives
+`docker run --rm`.
 
 ## C. Cloud Shell (remote, zero setup)
 

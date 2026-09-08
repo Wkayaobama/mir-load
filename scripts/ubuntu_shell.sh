@@ -12,8 +12,16 @@ if grep -qI $'\r' "$REPO_ROOT/scripts/run_pass1.sh" 2>/dev/null; then
   exit 2
 fi
 docker image inspect mrload-ubuntu >/dev/null 2>&1 || docker build -t mrload-ubuntu -f "$REPO_ROOT/scripts/dev/Dockerfile" "$REPO_ROOT"
+MOUNT_SRC="$REPO_ROOT"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    MOUNT_SRC="$(cygpath -w "$REPO_ROOT")"      # Docker Desktop wants C:\... here
+    export MSYS_NO_PATHCONV=1                   # stop Git Bash rewriting /work into C:\...\work
+    ;;
+esac
+# If Docker answers "the input device is not a TTY" (mintty), prefix the call with: winpty
 exec docker run -it --rm \
-  -v "$REPO_ROOT":/work -w /work \
+  -v "$MOUNT_SRC":/work -w /work \
   -v mrload-gcloud:/root/.config/gcloud \
   -e MRLOAD_BQ_PROJECT -e HUBSPOT_SANDBOX_TOKEN \
   mrload-ubuntu "${@:-bash}"
