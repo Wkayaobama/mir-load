@@ -91,6 +91,63 @@ hubspot:
     file_notes_post: MRLOAD_APPROVE_FILE_NOTES_POST
     unmigrate: MRLOAD_APPROVE_UNMIGRATE
 
+  # ── Schema propagation into HubSpot ──────────────────────────────────────
+  # The pipeline writes only built-in properties (name/description, hs_note_body,
+  # hs_attachment_ids, dealname…). The library schema reaches HubSpot through
+  # StackSync (BigQuery silver → HubSpot object, matched on the record id that
+  # ledger-export wrote back). StackSync never creates a property definition, so
+  # `run_pass1.sh hs-props` (before dbt) creates the ones below — idempotent, never
+  # modifies or deletes an existing definition — and `hs-props-verify` (after dbt)
+  # checks each against the built silver model (dbt catalog) and writes the
+  # StackSync mapping sheet: .mrload/review/stacksync_mapping.csv
+  properties:
+    gate: MRLOAD_APPROVE_PROPERTY_CREATE
+    group: { name: mrload_library, label: "mr-load library index" }
+    objects:
+      companies:
+        source_table: silver_library_company
+        match: { column: hs_company_id, hubspot: hs_object_id }
+        fields:
+          - { name: mrload_company_node_key,    column: company_node_key,     type: string,   label: "Library company node key",       description: "Path-as-index key of the company folder (30 Sales|20 opportunities…|Segment|Company)" }
+          - { name: mrload_legacy_company_id,   column: legacy_company_id,    type: string,   label: "Legacy company id",              description: "Library id of the company folder (3020Q… scheme)" }
+          - { name: mrload_segment,             column: segment,              type: string,   label: "Library segment" }
+          - { name: mrload_drive_folder_id,     column: drive_id,             type: string,   label: "Drive folder id" }
+          - { name: mrload_drive_link,          column: link,                 type: string,   label: "Drive folder link" }
+          - { name: mrload_asset_count,         column: asset_count,          type: number,   label: "Library assets (files)" }
+          - { name: mrload_deal_candidate_count, column: deal_candidate_count, type: number,  label: "Library PO/Billing PDFs" }
+          - { name: mrload_parked_count,        column: parked_count,         type: number,   label: "Library PDFs parked for review" }
+          - { name: mrload_drive_modified_at,   column: drive_modified_at,    type: datetime, label: "Drive folder modified at" }
+          - { name: mrload_resolution_status,   column: resolution_status,    type: string,   label: "mr-load resolution status",      description: "matched_by_name | created | resolved_from_ledger" }
+      notes:
+        source_table: silver_library_index
+        match: { column: hs_note_id, hubspot: hs_object_id }
+        fields:
+          - { name: mrload_legacy_library_id,   column: legacy_library_id,    type: string,   label: "Legacy library id",              description: "Canonical id of the indexed file" }
+          - { name: mrload_legacy_company_id,   column: legacy_company_id,    type: string,   label: "Legacy company id" }
+          - { name: mrload_node_key,            column: node_key,             type: string,   label: "Library node key" }
+          - { name: mrload_file_path,           column: legacy_file_path,     type: string,   label: "Library file path" }
+          - { name: mrload_file_name,           column: legacy_file_name,     type: string,   label: "Library file name" }
+          - { name: mrload_asset_class,         column: asset_class,          type: string,   label: "Library asset class",            description: "asset | deal_candidate | parked_for_review" }
+          - { name: mrload_libr_category,       column: libr_category,        type: string,   label: "Library category" }
+          - { name: mrload_extension,           column: extension,            type: string,   label: "File extension" }
+          - { name: mrload_drive_file_id,       column: drive_file_id,        type: string,   label: "Drive file id" }
+          - { name: mrload_drive_link,          column: legacy_file_link,     type: string,   label: "Drive file link" }
+          - { name: mrload_drive_md5,           column: drive_md5,            type: string,   label: "Drive md5" }
+          - { name: mrload_drive_size,          column: drive_size,           type: number,   label: "Drive size (bytes)" }
+          - { name: mrload_drive_modified_at,   column: libr_updated_at,      type: datetime, label: "Drive file modified at" }
+          - { name: mrload_hs_file_id,          column: hs_file_id,           type: string,   label: "HubSpot file id (phase 1 upload)" }
+      deals:
+        source_table: silver_library_deal_candidates
+        match: { column: hs_deal_id, hubspot: hs_object_id }
+        fields:
+          - { name: mrload_legacy_library_id,   column: legacy_library_id,    type: string,   label: "Legacy library id" }
+          - { name: mrload_legacy_company_id,   column: legacy_company_id,    type: string,   label: "Legacy company id" }
+          - { name: mrload_node_key,            column: node_key,             type: string,   label: "Library node key" }
+          - { name: mrload_file_path,           column: legacy_file_path,     type: string,   label: "Library file path" }
+          - { name: mrload_asset_class,         column: asset_class,          type: string,   label: "Library asset class" }
+          - { name: mrload_drive_file_id,       column: drive_file_id,        type: string,   label: "Drive file id" }
+          - { name: mrload_drive_link,          column: legacy_file_link,     type: string,   label: "Drive file link" }
+
 silver_validation:
   stop_checks:
     - unique_node_key

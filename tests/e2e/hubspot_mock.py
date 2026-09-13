@@ -22,7 +22,14 @@ STATE = {
     "portalId": 424242,
     "companies": {"9001": {"id": "9001", "properties": {"name": "Thorlabs", "domain": "thorlabs.com"}}},
     "files": {}, "notes": {}, "deals": {}, "associations": [],
-    "requests": {"search": 0, "company_create": 0, "upload": 0, "note": 0, "assoc": 0, "deal": 0, "delete_note": 0},
+    # property DEFINITIONS (schema propagation step). One pre-existing definition + group on
+    # companies so the ensure step exercises the "exists / not modified" path.
+    "property_groups": {"companies": {"mrload_library": {"name": "mrload_library", "label": "seeded"}}, "notes": {}, "deals": {}},
+    "properties": {"companies": {"mrload_drive_link": {"name": "mrload_drive_link", "label": "seeded label", "type": "string",
+                                                        "fieldType": "text", "groupName": "mrload_library"}},
+                   "notes": {}, "deals": {}},
+    "requests": {"search": 0, "company_create": 0, "upload": 0, "note": 0, "assoc": 0, "deal": 0, "delete_note": 0,
+                 "property_list": 0, "property_create": 0, "group_create": 0},
     "failed_once": False,
 }
 LOCK = threading.Lock()
@@ -68,6 +75,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(401, {"message": "missing bearer"})
         if p == "/account-info/v3/details":
             return self._json(200, {"portalId": STATE["portalId"], "accountType": "SANDBOX", "timeZone": "Europe/Zurich"})
+        m = re.fullmatch(r"/crm/v3/properties/(companies|notes|deals)(/groups)?", p)
+        if m:
+            with LOCK:
+                STATE["requests"]["property_list"] += 1
+                store = STATE["property_groups" if m.group(2) else "properties"][m.group(1)]
+                return self._json(200, {"results": list(store.values())})
         return self._json(404, {"message": f"no route GET {p}"})
 
     def do_POST(self):
@@ -78,6 +91,31 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth_ok():
             return self._json(401, {"message": "missing bearer"})
         with LOCK:
+            m = re.fullmatch(r"/crm/v3/properties/(companies|notes|deals)/groups", p)
+            if m:
+                STATE["requests"]["group_create"] += 1
+                body = json.loads(raw or b"{}"); name = body.get("name", "")
+                store = STATE["property_groups"][m.group(1)]
+                if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+                    return self._json(400, {"status": "error", "message": f"invalid group name {name!r}"})
+                if name in store:
+                    return self._json(409, {"status": "error", "message": f"group {name} already exists"})
+                store[name] = {"name": name, "label": body.get("label", name)}
+                return self._json(201, store[name])
+            m = re.fullmatch(r"/crm/v3/properties/(companies|notes|deals)", p)
+            if m:
+                STATE["requests"]["property_create"] += 1
+                body = json.loads(raw or b"{}"); name = body.get("name", ""); obj = m.group(1)
+                if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+                    return self._json(400, {"status": "error", "message": f"invalid property name {name!r}"})
+                if body.get("type") not in ("string", "number", "datetime", "date", "bool", "enumeration"):
+                    return self._json(400, {"status": "error", "message": f"invalid type {body.get('type')!r}"})
+                if body.get("groupName") not in STATE["property_groups"][obj]:
+                    return self._json(400, {"status": "error", "message": f"Property group {body.get('groupName')!r} does not exist"})
+                if name in STATE["properties"][obj]:
+                    return self._json(409, {"status": "error", "message": f"property {name} already exists"})
+                STATE["properties"][obj][name] = {k: body.get(k) for k in ("name", "label", "type", "fieldType", "groupName", "description")}
+                return self._json(201, STATE["properties"][obj][name])
             if p == "/crm/v3/objects/companies/search":
                 STATE["requests"]["search"] += 1
                 body = json.loads(raw or b"{}")

@@ -133,6 +133,44 @@ Prints the exact `bq load --replace --source_format=CSV --skip_leading_rows=1
 (dry), then asks. `--replace` makes every load a full snapshot, so re-walk +
 re-load is the way to refresh. This is what **creates** the library table.
 
+## P. `hs-props` — HubSpot property definitions  [gate MRLOAD_APPROVE_PROPERTY_CREATE]
+
+**Why this step exists.** The pipeline writes only built-in HubSpot properties
+(company `name`/`description`, `hs_note_body`/`hs_attachment_ids`/`hs_timestamp`,
+`dealname`…). The library schema — legacy ids, node keys, asset classes, Drive
+ids, counts — reaches HubSpot through **StackSync**, syncing the BigQuery silver
+tables into HubSpot objects matched on the record ids that `ledger-export`
+writes back. StackSync never creates a property definition, so the definitions
+must exist before you map anything in its UI. That is this step: it creates
+what `context/cards/library.yaml` → `hubspot.properties` declares, and nothing else.
+
+```bash
+scripts/run_pass1.sh hs-props
+```
+Dry first: one line per object type and status (`would_create`, `exists`,
+`type_mismatch`), then the question, then the live run with the gate set inline.
+Idempotent — re-running reports `exists` everywhere and creates nothing. An
+existing definition is **never modified or deleted**: a `type_mismatch` (the
+portal already has the name with another type) stops the step; rename the field
+in the card or fix the definition in HubSpot by hand.
+
+What gets created, per object type, all in the property group `mrload_library`:
+
+| object | source silver table | match key (StackSync) | properties |
+|---|---|---|---|
+| companies | `silver_library_company` | `hs_company_id` ↔ Record ID | `mrload_company_node_key`, `mrload_legacy_company_id`, `mrload_segment`, `mrload_drive_folder_id`, `mrload_drive_link`, `mrload_asset_count`, `mrload_deal_candidate_count`, `mrload_parked_count`, `mrload_drive_modified_at`, `mrload_resolution_status` |
+| notes | `silver_library_index` | `hs_note_id` ↔ Record ID | `mrload_legacy_library_id`, `mrload_legacy_company_id`, `mrload_node_key`, `mrload_file_path`, `mrload_file_name`, `mrload_asset_class`, `mrload_libr_category`, `mrload_extension`, `mrload_drive_file_id`, `mrload_drive_link`, `mrload_drive_md5`, `mrload_drive_size`, `mrload_drive_modified_at`, `mrload_hs_file_id` |
+| deals | `silver_library_deal_candidates` | `hs_deal_id` ↔ Record ID | `mrload_legacy_library_id`, `mrload_legacy_company_id`, `mrload_node_key`, `mrload_file_path`, `mrload_asset_class`, `mrload_drive_file_id`, `mrload_drive_link` |
+
+Types: `string/text`, `number/number`, `datetime/date` — chosen so StackSync
+needs no transformation. Scopes: the private app needs the schema (property)
+write scope for companies, deals and notes; a `403` in the step output names
+the missing one. Prefix `mrload_` keeps the family apart from ic-load's
+`icalps_*` properties in production.
+
+Your operation: none in HubSpot before the step. After it, Settings → Properties
+in the portal shows the group `mr-load library index` on each object.
+
 ## 2a + 3a. `dbt` — silver + the cardinality gate
 
 `dbt deps` (dbt_utils) → `dbt run` → `dbt test`, target `dev` (OAuth) or `runner`
@@ -164,6 +202,37 @@ segment (e.g. a lead-tracking spreadsheet under Quantum) are listed in
 
 **Do not open the company-create gate while a STOP test is red.** A company
 created from a duplicate folder is the expensive thing to undo.
+
+## P'. `hs-props-verify` — the StackSync mapping sheet (no gate, nothing written to HubSpot)
+
+```bash
+scripts/run_pass1.sh hs-props-verify        # → .mrload/review/stacksync_mapping.csv
+```
+Runs after `dbt` because it needs the silver models **as built**: the `dbt`
+step now runs `dbt docs generate` between `run` and `test`, and its
+`dbt/target/catalog.json` lists the real columns and types of every model. For each declared property the step
+checks (a) the HubSpot definition exists with the declared type and (b) the
+mapped column exists in the built model — the same column StackSync will read.
+Any `missing` (run `hs-props`) or `column_missing` (the card maps a column the
+model does not have) stops the step.
+
+The sheet has one `match_key` row and one `property` row per object type:
+
+| column | meaning |
+|---|---|
+| `object_type` | HubSpot object: companies / notes / deals |
+| `bigquery_table` | the silver table as built (`project.dataset.model`) — the StackSync source |
+| `bigquery_column` → `hubspot_property` | one field mapping; `hubspot_type` / `bigquery_type` already aligned |
+| `kind = match_key` | `bigquery_column` holds the HubSpot record id; map it to **Record ID** (`hs_object_id`) |
+| `status` | `ok` everywhere before you open the StackSync UI |
+
+Your operation, in the StackSync UI, one sync per object type, direction
+BigQuery → HubSpot: source = `bigquery_table`; destination = the object type;
+match on the `match_key` row (`hs_company_id` / `hs_note_id` / `hs_deal_id` ↔
+Record ID); map every `property` row column → property. Values flow only after
+`ledger-export` has written the record ids back (step 6), so create the syncs
+now and enable them after step 6; before that the match column is NULL and
+StackSync has nothing to match.
 
 ## `review` — your queues (offline, no network)
 

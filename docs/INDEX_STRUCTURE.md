@@ -99,7 +99,9 @@ Drive metadata.
 walk           Drive API DFS (parents[], owners, createdTime, webViewLink) → library_hierarchy.csv
 bq-init        datasets + empty ledger tables (dbt sources resolve before step 6)
 bq-load        hierarchy → mrload_raw.library_hierarchy                       [MRLOAD_APPROVE_BQ_LOAD]
-dbt run/test   silver_library_company / _index / _deal_candidates / _parked / _orphans + cardinality tests
+hs-props       HubSpot property DEFINITIONS from the card (StackSync targets; values never written here) [MRLOAD_APPROVE_PROPERTY_CREATE]
+dbt run/test   silver_library_company / _index / _deal_candidates / _parked / _orphans + cardinality tests (+ docs generate → catalog)
+hs-props-verify definitions vs built silver (catalog) → review/stacksync_mapping.csv (the sheet you map in the StackSync UI)
 review-export  operator queues + deal_decisions.csv template (offline)
 companies      company folder → HubSpot company (search by name, create)     [MRLOAD_APPROVE_COMPANY_CREATE]
 attach         download on demand → POST files → note → associate to company [MRLOAD_APPROVE_FILES_UPLOAD, MRLOAD_APPROVE_FILE_NOTES_POST]

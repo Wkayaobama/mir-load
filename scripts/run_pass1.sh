@@ -9,7 +9,9 @@
 #   walk            0. Drive API DFS → .mrload/library_hierarchy.csv (+ silver preview)
 #   bq-init         B. create datasets + empty ledger tables (dbt sources resolve)
 #   bq-load         1a. hierarchy CSV → mrload_raw.library_hierarchy        [gate BQ_LOAD]
-#   dbt             2a+3a. dbt deps / run / test — the cardinality gate
+#   hs-props        P.  HubSpot property DEFINITIONS from the card (StackSync targets) [gate PROPERTY_CREATE]
+#   dbt             2a+3a. dbt deps / run / test (+ docs generate → catalog) — the cardinality gate
+#   hs-props-verify P'. definitions vs built silver → .mrload/review/stacksync_mapping.csv
 #   review          operator queues + deal_decisions.csv template (offline)
 #   companies-dry   1b. search-only resolution report
 #   companies-live  2b. create missing companies                             [gate COMPANY_CREATE]
@@ -189,12 +191,59 @@ step_dbt() {
   need dbt "pip install dbt-bigquery"
   ( cd dbt && { [[ -d dbt_packages/dbt_utils ]] || logrun dbt-deps dbt deps --profiles-dir . --target "$DBT_TARGET"; } \
            && logrun dbt-run  dbt run  --profiles-dir . --target "$DBT_TARGET" \
+           && { logrun dbt-docs dbt docs generate --profiles-dir . --target "$DBT_TARGET" >/dev/null \
+                || warn "dbt docs generate failed — hs-props-verify will check HubSpot definitions only"; } \
            && logrun dbt-test dbt test --profiles-dir . --target "$DBT_TARGET" )
+  # docs generate sits between run and test on purpose: it rewrites target/run_results.json, and the
+  # gate (and scripts/dev/dbt_failures.sh) must see the TEST results there; catalog.json feeds hs-props-verify.
   echo
   echo "   OPERATOR reads: any FAIL = cardinality violation (multi-parent file, duplicate company name in a"
   echo "   segment, tradeshow leak, deal_candidate that is not a PO/Billing pdf). Fix in Drive, re-walk, re-load."
   echo "   WARN on assert_asset_has_company_anchor = loose files at segment level → silver_library_orphans."
   ok "cardinality gate green — company creation may proceed"
+}
+
+step_hs_props() {
+  say "P/hs-props — HubSpot property definitions for the library index (the StackSync targets)"
+  [[ -n "${HUBSPOT_SANDBOX_TOKEN:-}" ]] || die "HUBSPOT_SANDBOX_TOKEN unset — definitions are created in that portal"
+  logrun hs-props-dry $RUNNER properties ensure >"$STATE/hs_props_dry.json" || true
+  props_summary "$STATE/hs_props_dry.json"
+  local mm; mm=$(count_json "$STATE/hs_props_dry.json" "sum(1 for r in d if r['status']=='type_mismatch')")
+  [[ "$mm" == "0" ]] || die "$mm existing definitions differ in type from context/cards/library.yaml — rename in the card or fix in HubSpot; nothing is modified automatically"
+  local n; n=$(count_json "$STATE/hs_props_dry.json" "sum(1 for r in d if r['status']=='would_create')")
+  if [[ "$n" == "0" ]]; then ok "every declared group/property already exists in the portal"; return 0; fi
+  confirm "Create $n property groups/definitions in the portal of HUBSPOT_SANDBOX_TOKEN (definitions only, no values)?"
+  MRLOAD_APPROVE_PROPERTY_CREATE=1 logrun hs-props-live $RUNNER properties ensure >"$STATE/hs_props_live.json" || true
+  props_summary "$STATE/hs_props_live.json"
+  local f; f=$(count_json "$STATE/hs_props_live.json" "sum(1 for r in d if r['status']=='failed')")
+  [[ "$f" == "0" ]] || die "$f definitions failed — a 403 names the missing scope (schema write for that object type); fix the private app and re-run"
+  ok "property definitions in place — StackSync can now be mapped to them (after hs-props-verify)"
+}
+props_summary() {  # props_summary <json>
+  $PY - "$1" <<'EOF'
+import json, sys, collections
+d = json.load(open(sys.argv[1])); c = collections.Counter((r["object_type"], r["status"]) for r in d)
+for (o, s), n in sorted(c.items()): print(f"  {o:<10} {s:<16} {n}")
+for r in d:
+    if r["status"] in ("type_mismatch", "failed"): print("  !!", r["object_type"], r.get("name") or r.get("hubspot_property"), r["status"], r.get("error") or r.get("note"))
+EOF
+}
+
+step_hs_props_verify() {
+  say "P'/hs-props-verify — definitions vs the silver models as built → $REVIEW/stacksync_mapping.csv"
+  [[ -f dbt/target/catalog.json ]] || warn "dbt/target/catalog.json missing (run 'dbt' first) — HubSpot definitions checked, silver columns not"
+  logrun hs-props-verify $RUNNER properties verify --catalog dbt/target/catalog.json --out-dir "$REVIEW" >"$STATE/hs_props_verify.json" || true
+  props_summary "$STATE/hs_props_verify.json"
+  local bad; bad=$(count_json "$STATE/hs_props_verify.json" "sum(1 for r in d if r['status'] not in ('ok','ok_hubspot_only'))")
+  [[ "$bad" == "0" ]] || die "$bad rows not ok (missing → run hs-props; column_missing → the card maps a column the silver model does not have)"
+  echo
+  echo "   OPERATOR (StackSync UI) — one sync per object type, direction BigQuery → HubSpot, from $REVIEW/stacksync_mapping.csv:"
+  echo "     source      = bigquery_table (silver model as built)"
+  echo "     destination = HubSpot <object_type>"
+  echo "     match key   = the match_key row: bigquery_column  ↔  HubSpot Record ID (hs_object_id)"
+  echo "     fields      = every property row: bigquery_column → hubspot_property (types already aligned)"
+  echo "   Values appear in HubSpot only after ledger-export has written the record ids back (hs_company_id, hs_note_id, hs_deal_id)."
+  ok "mapping sheet written"
 }
 
 step_review() {
@@ -309,7 +358,7 @@ step_status() {
 }
 
 step_all() {
-  step_preflight; step_walk; step_bq_init; step_bq_load; step_dbt; step_review
+  step_preflight; step_walk; step_bq_init; step_bq_load; step_hs_props; step_dbt; step_hs_props_verify; step_review
   step_companies_live; step_attach_upload; step_attach_notes; step_ledger_export
   step_status
   echo; ok "pass 1 complete. Pass 2: edit $REVIEW/deal_decisions.csv then 'deals-dry' / 'deals-live'."
@@ -319,6 +368,7 @@ case "${1:-}" in
   preflight) step_preflight ;;      walk) step_walk ;;
   bq-init) step_bq_init ;;          bq-load) step_bq_load ;;
   dbt) step_dbt ;;                  review) step_review ;;
+  hs-props) step_hs_props ;;        hs-props-verify) step_hs_props_verify ;;
   companies-dry) step_companies_dry ;; companies-live) step_companies_live ;;
   attach-dry) step_attach_dry ;;    attach-upload) step_attach_upload ;;
   attach-notes) step_attach_notes ;; ledger-export) step_ledger_export ;;

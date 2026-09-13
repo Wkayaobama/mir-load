@@ -104,6 +104,36 @@ class HubSpotClient:
         resp = self._session.delete(url, timeout=self.timeout_s)
         resp.raise_for_status()
 
+    # -- Properties API (definitions, never values) ---------------------------
+    # Used by `runner properties` around the dbt step: the StackSync targets must
+    # exist before any sync can be mapped. Creating a definition needs the object's
+    # schema-write scope on the private app (HubSpot's 403 body names it).
+
+    def list_properties(self, object_type: str) -> list[dict]:
+        url = f"{self.base_url}/crm/v3/properties/{object_type}"
+        resp = self._session.get(url, timeout=self.timeout_s)
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    def list_property_groups(self, object_type: str) -> list[dict]:
+        url = f"{self.base_url}/crm/v3/properties/{object_type}/groups"
+        resp = self._session.get(url, timeout=self.timeout_s)
+        resp.raise_for_status()
+        return resp.json().get("results", [])
+
+    def create_property_group(self, object_type: str, *, name: str, label: str) -> dict:
+        url = f"{self.base_url}/crm/v3/properties/{object_type}/groups"
+        resp = self._session.post(url, json={"name": name, "label": label}, timeout=self.timeout_s)
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_property(self, object_type: str, definition: dict) -> dict:
+        """POST /crm/v3/properties/{objectType} — body from properties.property_definition()."""
+        url = f"{self.base_url}/crm/v3/properties/{object_type}"
+        resp = self._session.post(url, json=definition, timeout=self.timeout_s)
+        resp.raise_for_status()
+        return resp.json()
+
     # -- Files API -----------------------------------------------------------
 
     def upload_file(

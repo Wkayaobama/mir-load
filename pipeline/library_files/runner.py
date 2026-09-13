@@ -37,6 +37,8 @@ from .drive_walker import ApiDriveLister, DriveFile, dfs_entries
 from .hierarchy import HierarchyWriter, read_hierarchy_csv
 from .ledger import LEDGER_TABLES, SqliteLedger
 from .manifest import load_manifest
+from .properties import (OK_STATUSES, ensure_properties, load_catalog, load_property_plan, summarize,
+                         verify_properties, write_mapping_sheet)
 from .silver_library import SilverIndexBuilder
 from .uploader import HubSpotFileUploader, LibraryFileRow
 from .walker import IMAGE_EXTS, DriveTreeWalker
@@ -47,6 +49,7 @@ APPROVE_FILES_UPLOAD_ENV = "MRLOAD_APPROVE_FILES_UPLOAD"
 APPROVE_FILE_NOTES_POST_ENV = "MRLOAD_APPROVE_FILE_NOTES_POST"
 APPROVE_UNMIGRATE_ENV = "MRLOAD_APPROVE_UNMIGRATE"
 APPROVE_DEAL_CREATE_ENV = "MRLOAD_APPROVE_DEAL_CREATE"
+APPROVE_PROPERTY_CREATE_ENV = "MRLOAD_APPROVE_PROPERTY_CREATE"
 
 
 def _gate(env: str) -> bool:
@@ -295,6 +298,41 @@ def cmd_review_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_properties(args: argparse.Namespace) -> int:
+    """Schema propagation into HubSpot (definitions only; values flow through StackSync).
+
+    ensure  — create missing groups/properties from the card (gated; never modifies existing ones)
+    verify  — definitions vs the built silver model (dbt catalog) → StackSync mapping sheet
+    """
+    settings = Settings.from_env()
+    card = load_library_card(Path(args.card))
+    plan = load_property_plan(card.raw)
+    client = _client_or_none(settings)
+    if args.mode == "ensure":
+        _banner("properties ensure", [("property/group create", APPROVE_PROPERTY_CREATE_ENV)])
+        if client is None:
+            results = [{"object_type": f.object_type, "kind": "property", "name": f.name, "column": f.column,
+                        "type": f.type, "status": "unknown_no_token", "error": "HUBSPOT_SANDBOX_TOKEN unset"}
+                       for f in plan.fields]
+        else:
+            results = ensure_properties(client, plan, live=_gate(APPROVE_PROPERTY_CREATE_ENV))
+        print(json.dumps(results, indent=2))
+        print(f"properties ensure: {summarize(results)}", file=sys.stderr)
+        return 1 if any(r["status"] in ("failed", "type_mismatch") for r in results) else 0
+
+    _banner("properties verify", [])
+    catalog_path = Path(args.catalog)
+    catalog = load_catalog(catalog_path) if catalog_path.exists() else None
+    if catalog is None:
+        print(f"  no dbt catalog at {catalog_path} — checking HubSpot definitions only "
+              f"(run the dbt step; it generates the catalog)", file=sys.stderr)
+    rows = verify_properties(client, plan, catalog)
+    sheet = write_mapping_sheet(rows, Path(args.out_dir) / "stacksync_mapping.csv")
+    print(json.dumps(rows, indent=2))
+    print(f"properties verify: {summarize(rows)} → {sheet}", file=sys.stderr)
+    return 1 if any(r["status"] not in OK_STATUSES and r["status"] != "unknown_no_token" for r in rows) else 0
+
+
 def cmd_ledger_export(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
     _banner("ledger-export", [("bq load of ledger tables", APPROVE_BQ_LOAD_ENV)])
@@ -379,6 +417,13 @@ def main(argv: list[str] | None = None) -> int:
     rev.add_argument("--hierarchy", required=True)
     rev.add_argument("--out-dir", default=".mrload/review")
     rev.set_defaults(func=cmd_review_export)
+
+    props = sub.add_parser("properties", help="HubSpot property definitions for StackSync: ensure (gated) / verify + mapping sheet.")
+    props.add_argument("mode", choices=["ensure", "verify"])
+    props.add_argument("--card", default=str(DEFAULT_CARD_PATH))
+    props.add_argument("--catalog", default="dbt/target/catalog.json", help="dbt catalog of the built silver models (verify)")
+    props.add_argument("--out-dir", default=".mrload/review", help="where stacksync_mapping.csv is written (verify)")
+    props.set_defaults(func=cmd_properties)
 
     lex = sub.add_parser("ledger-export", help="Step 6: ledger tables → CSV → BigQuery (gated bq load).")
     lex.add_argument("--ledger")

@@ -65,9 +65,12 @@ flowchart TD
     P["preflight\ntools · env · Drive root · token"] --> W["walk\nDrive DFS → .mrload/library_hierarchy.csv"]
     W --> BI["bq-init\ndatasets + empty ledger tables"]
     BI --> BL["bq-load  ⟨LIVE gate BQ_LOAD⟩\nCSV → mrload_raw.library_hierarchy"]
-    BL --> D["dbt run + test\ncardinality contract = the gate"]
+    BL --> HP["hs-props ⟨PROPERTY_CREATE⟩\nHubSpot property DEFINITIONS (StackSync targets)"]
+    HP --> D["dbt run + test + docs generate\ncardinality contract = the gate"]
+    D --> HV["hs-props-verify\ndefinitions vs built silver → stacksync_mapping.csv"]
+    HV --> R
     D -- "any test fails → STOP, nothing else fires" --> X((stop))
-    D --> R["review\noperator queues · deal_decisions.csv"]
+    R["review\noperator queues · deal_decisions.csv"]
     R --> C1["companies-dry"] --> C2["companies-live ⟨COMPANY_CREATE⟩"]
     C2 --> A1["attach-dry"] --> A2["attach-upload ⟨FILES_UPLOAD⟩\nphase 1: Drive → HubSpot Files"]
     A2 --> A3["attach-notes ⟨FILE_NOTES_POST⟩\nphase 2: note + association"]
@@ -588,6 +591,21 @@ Invoke-Ubuntu 'scripts/run_pass1.sh bq-load' -Live
 
 #!markdown
 
+### 6.3b · hs-props — **LIVE** (gate `MRLOAD_APPROVE_PROPERTY_CREATE`), definitions only
+Creates the HubSpot property **definitions** declared in `context/cards/library.yaml`
+(`hubspot.properties`): group `mrload_library` on companies, notes and deals, prefix `mrload_`.
+No values are written here; the values reach HubSpot through StackSync (BigQuery silver →
+HubSpot, matched on the record ids that `ledger-export` writes back), and StackSync cannot map a
+property that does not exist. Idempotent: `exists` everywhere on a re-run. An existing definition
+with another type is reported as `type_mismatch` and never modified. A `403` names the missing
+schema-write scope of the private app.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh hs-props' -Live
+
+#!markdown
+
 ### 6.4 · dbt — run + test: **the cardinality gate**
 Builds `stg_library_hierarchy`, `silver_library_company`, `silver_library_index`,
 `_deal_candidates`, `_parked`, `_orphans` on BigQuery and runs the contract tests (unique
@@ -598,6 +616,21 @@ here** — nothing downstream fires until the index is right. `scripts/dev/dbt_f
 #!pwsh
 
 Invoke-Ubuntu 'scripts/run_pass1.sh dbt'
+
+#!markdown
+
+### 6.4b · hs-props-verify — definitions vs the silver models as built (no gate)
+Reads `dbt/target/catalog.json` (the `dbt` step runs `dbt docs generate` between run and test) and checks every
+declared property twice: the HubSpot definition exists with the declared type, and the mapped
+column exists in the built silver model. Writes `.mrload/review/stacksync_mapping.csv`: one
+`match_key` row and one `property` row per object type, which is exactly what you enter in the
+StackSync UI (source = `bigquery_table`, match = `bigquery_column` ↔ Record ID, fields =
+`bigquery_column` → `hubspot_property`). Expected: `ok` on every row.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh hs-props-verify'
+Invoke-Ubuntu 'head -5 .mrload/review/stacksync_mapping.csv | cut -c1-180'
 
 #!markdown
 

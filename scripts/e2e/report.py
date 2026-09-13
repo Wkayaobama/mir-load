@@ -97,6 +97,28 @@ a1, a2 = jload(R / "hs_after_attach.json"), jload(R / "hs_after_rerun.json")
 check("idempotency: re-running attach fired zero new uploads/notes/associations",
       a1["requests"] == a2["requests"] and len(a1["notes"]) == len(a2["notes"]))
 
+# 5b. schema propagation: property definitions (before dbt) + mapping sheet (after dbt)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from pipeline.library_files.card import load_library_card      # noqa: E402
+from pipeline.library_files.properties import load_property_plan  # noqa: E402
+plan = load_property_plan(load_library_card().raw)
+p1, p2 = jload(R / "hs_after_props.json"), jload(R / "hs_after_props_rerun.json")
+declared = {(o.object_type, f.name) for o in plan.objects for f in o.fields}
+present = {(o, n) for o, props in p1["properties"].items() for n in props}
+check(f"properties: all {len(declared)} declared definitions exist in HubSpot after hs-props, in group {plan.group_name}",
+      declared <= present and all(p1["properties"][o][n]["groupName"] == plan.group_name for o, n in declared),
+      f"{len(declared & present)}/{len(declared)}")
+check("properties: pre-existing companies.mrload_drive_link reused, never modified",
+      p1["properties"]["companies"]["mrload_drive_link"]["label"] == "seeded label")
+check("properties: second hs-props run created nothing (idempotent)",
+      p1["requests"]["property_create"] == p2["requests"]["property_create"] > 0
+      and p1["requests"]["group_create"] == p2["requests"]["group_create"] == 2, str(p2["requests"]["property_create"]))
+sheet = list(csv.DictReader((R / "review" / "stacksync_mapping.csv").open(encoding="utf-8")))
+check(f"properties verify: mapping sheet has {len(declared)} property rows + 3 match keys, every silver column found in the DuckDB catalog",
+      len(sheet) == len(declared) + 3 and all(r["status"] == "ok" for r in sheet)
+      and all(r["bigquery_type"] for r in sheet if r["kind"] == "property"),
+      str({r["status"] for r in sheet}))
+
 # 6. step 6 write-back visible in silver (DuckDB)
 try:
     import duckdb

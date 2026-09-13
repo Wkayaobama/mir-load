@@ -1,12 +1,12 @@
-# e2e rehearsal record — 2026-09-07
+# e2e rehearsal record — 2026-09-13 (32 checks; first recorded 2026-09-07 with 28)
 
 Produced by `scripts/e2e_rehearsal.sh` in the development container (no Google
 or HubSpot credentials available there, see `docs/RUNBOOK_PASS1.md` →
 Rehearsal). Real code paths against local stand-ins; wall time ≈ 31 s.
 
-## Clean scenario — full sequence steps 0 → 7
+## Clean scenario — full sequence steps 0 → 7 (+ hs-props before dbt, hs-props-verify after)
 
-# mr-load e2e rehearsal — 28/28 checks passed
+# mr-load e2e rehearsal — 32/32 checks passed
 
 Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot client → HubSpot mock · `bq` stub with schema validation · real dbt models + tests on DuckDB · SQLite ledger.
 
@@ -32,14 +32,18 @@ Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot c
 | 18 | attach p2: one note→company association per note | PASS |  |
 | 19 | cardinality: every note is associated to exactly its folder's company (Library→Company N:1) | PASS | mismatches=[] |
 | 20 | idempotency: re-running attach fired zero new uploads/notes/associations | PASS |  |
-| 21 | silver: index rows == attachable files | PASS | 20 |
-| 22 | silver: hs_note_id populated for every index row after ledger-export | PASS | 20/20 |
-| 23 | silver: hs_company_id populated for all 7 companies | PASS | 7 |
-| 24 | silver: orphans model holds the segment-level spreadsheet | PASS | 1 |
-| 25 | pass 2: 4 deals created from approved decisions | PASS | {'created': 4} |
-| 26 | pass 2: deal→company and note→deal associations per deal | PASS |  |
-| 27 | pass 2: hs_deal_id visible in silver_library_deal_candidates | PASS | 4 |
-| 28 | dbt final build after write-back: 34 tests, 0 fail/error | PASS | {'pass': 33, 'warn': 1, 'fail': 0, 'error': 0} |
+| 21 | properties: all 31 declared definitions exist in HubSpot after hs-props, in group mrload_library | PASS | 31/31 |
+| 22 | properties: pre-existing companies.mrload_drive_link reused, never modified | PASS |  |
+| 23 | properties: second hs-props run created nothing (idempotent) | PASS | 30 |
+| 24 | properties verify: mapping sheet has 31 property rows + 3 match keys, every silver column found in the DuckDB catalog | PASS | {'ok'} |
+| 25 | silver: index rows == attachable files | PASS | 20 |
+| 26 | silver: hs_note_id populated for every index row after ledger-export | PASS | 20/20 |
+| 27 | silver: hs_company_id populated for all 7 companies | PASS | 7 |
+| 28 | silver: orphans model holds the segment-level spreadsheet | PASS | 1 |
+| 29 | pass 2: 4 deals created from approved decisions | PASS | {'created': 4} |
+| 30 | pass 2: deal→company and note→deal associations per deal | PASS |  |
+| 31 | pass 2: hs_deal_id visible in silver_library_deal_candidates | PASS | 4 |
+| 32 | dbt final build after write-back: 34 tests, 0 fail/error | PASS | {'pass': 33, 'warn': 1, 'fail': 0, 'error': 0} |
 
 Ledger at the end: companies_resolved created=6 / matched_by_name=1 ·
 files_uploaded uploaded=20 · file_notes_posted attached=20 · deals_created created=4.

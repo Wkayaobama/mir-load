@@ -37,7 +37,10 @@ $RUN walk
 $RUNNER ledger-export --ledger "$MRLOAD_LEDGER_PATH" --out-dir "$R/ledger_export" --dataset mrload_raw >/dev/null   # header-only CSVs for the DuckDB sources
 $RUN bq-init
 $RUN bq-load
+$RUN hs-props;        snap hs_after_props
+$RUN hs-props;        snap hs_after_props_rerun      # idempotent: 0 creates
 $RUN dbt;             cp dbt/target/run_results.json "$R/dbt_test_gate.json"
+$RUN hs-props-verify
 $RUN review
 $RUN companies-live
 $RUN attach-upload

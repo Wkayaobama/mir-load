@@ -32,7 +32,7 @@ notebook calls prints masked values only, so the file is safe to keep in git.
 | B Dev Container | clone, `docker build`, `crlf_check.sh` + guarded LF fix, verify, *Reopen in Container* | no |
 | 4 `.env` clinic | `env_clinic.sh --fix`, `Set-EnvKey` (masked → `env_set.sh`), `env_clinic.sh`, `install_git_hooks.sh`, `guard_proof.sh` | no |
 | 5 Google auth | `gauth.sh`, then `auth_check.sh` | `gauth.sh` only (OAuth code) |
-| 6–7 pipeline | every `run_pass1.sh` step; LIVE steps blocked until `$ConfirmLive = $true` | no |
+| 6–7 pipeline | every `run_pass1.sh` step incl. `hs-props` / `hs-props-verify` (HubSpot property definitions → StackSync mapping sheet); LIVE steps blocked until `$ConfirmLive = $true` | no |
 | 8 rehearsals | unit tests, e2e clean, e2e dirty (must stop at the dbt gate) | no |
 | 9 troubleshooting | `last_log.sh`, `dbt_failures.sh`, `status`, `unmigrate` | no |
 

@@ -218,6 +218,21 @@
       "detail": "live gates ask for YES in this terminal"
     },
     {
+      "label": "mr-load: step hs-props",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh hs-props",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "HubSpot property definitions from the card (gate MRLOAD_APPROVE_PROPERTY_CREATE, asks YES) — before dbt"
+    },
+    {
       "label": "mr-load: step dbt",
       "type": "shell",
       "command": "bash scripts/run_pass1.sh dbt",
@@ -231,6 +246,21 @@
         "clear": true
       },
       "detail": ""
+    },
+    {
+      "label": "mr-load: step hs-props-verify",
+      "type": "shell",
+      "command": "bash scripts/run_pass1.sh hs-props-verify",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "definitions vs built silver (dbt catalog) → .mrload/review/stacksync_mapping.csv — after dbt"
     },
     {
       "label": "mr-load: step review",
