@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: stg_library_hierarchy
+    description: >
+      Typed view over bronze. Carries the cardinality contract of
+      context/cards/library.yaml. BigQuery enforces only not_null; primary_key /
+      foreign_key below are declared for lineage and the optimizer — the
+      ENFORCEMENT is the data tests on this model and the singular tests in tests/.
+    config:
+      contract:
+        enforced: false   # view; constraints declared on the silver tables
+    columns:
+      - name: node_key
+        description: "PK"
+        tests:
+          - not_null
+          - unique
+      - name: parent_key
+        description: "FK → node_key (NULL at depth 1)"
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_library_hierarchy')
+                field: node_key
+      - name: depth
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+      - name: libr_category
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['taxonomy', 'segment', 'company_folder', 'engagement_folder', 'document']
+      - name: asset_class
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['asset', 'deal_candidate', 'parked_for_review', 'shortcut']
+      - name: parents_count
+        description: "Drive node → parent must be N:1 (tree). > 1 = DAG violation (REJECT)"
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "= 1"
+      - name: company_node_key
+        description: "Library → Company N:1 anchor"
+        tests:
+          - relationships:
+              arguments:
+                to: ref('stg_library_hierarchy')
+                field: node_key

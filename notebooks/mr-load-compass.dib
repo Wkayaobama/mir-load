@@ -1,0 +1,761 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"pwsh","items":[{"aliases":[],"languageName":"PowerShell","name":"pwsh"},{"aliases":[],"languageName":"Mermaid","name":"mermaid"}]}}
+
+#!markdown
+
+# mr-load compass — WSL route, Dev Container route, one notebook
+
+This notebook is the **map and the remote control** for setting up and running the
+mr-load library pipeline (Google Drive → hierarchical index → BigQuery/dbt → HubSpot).
+It exists because the same project can be driven from three places and the routes were
+getting mixed up:
+
+| Route | Where Ubuntu lives | Where the clone lives | How this notebook reaches it |
+|---|---|---|---|
+| **A · WSL** | WSL2 distro on this Windows machine | `~/mir-load` **inside** the distro (Linux filesystem) | `wsl.exe -d <distro> -e bash -lc …` |
+| **B · Dev Container / Docker** | the `mrload-ubuntu` image (`scripts/dev/Dockerfile`) | `C:\…\mir-load` on Windows, bind-mounted at `/work` | `docker run --rm -v <clone>:/work … bash -lc …` |
+| **C · linux** | you opened this notebook *inside* the Dev Container (or any Ubuntu with the .NET SDK) | the current folder | `bash -lc …` |
+
+**How to use it**
+1. Run the *Switches* cell first, every time you open the notebook (kernel state is not saved). Pick `$Route`.
+2. Run cells top to bottom. Every cell says what it does and what output means "good".
+3. Cells marked **TERMINAL** cannot run here (they need a keyboard: the `sudo` password, an OAuth code). The cell opens a real terminal window for you and prints the exact lines to paste.
+4. Cells marked **LIVE** write to BigQuery or HubSpot. They refuse to run until `$ConfirmLive = $true` is set in the Switches cell — and they still re-run their dry counterpart first (that is `scripts/run_pass1.sh`'s own behaviour).
+
+**Why this is safe for secrets**
+- `.dib` notebooks store **no outputs**, and every script called here prints masked values only (`pat-…(44 chars)`).
+- Secrets are typed into a masked prompt and piped straight into `.env` *inside Ubuntu* by `scripts/dev/env_set.sh`; they never appear in a cell, in a variable that persists, or on the Windows side of route A.
+- `.env` / `.env.*` are git-ignored, `scripts/dev/env_clinic.sh` proves it, and `scripts/dev/install_git_hooks.sh` adds a pre-commit hook that refuses env files and token-shaped strings.
+
+Requirements on the Windows host: VS Code, the **Polyglot Notebooks** extension (`ms-dotnettools.dotnet-interactive-vscode`) and the .NET SDK it asks for on first open (`winget install Microsoft.DotNet.SDK.9`, or `.SDK.8` if the extension names 8). The notebook kernel is PowerShell, bundled by the extension — you do not need to install `pwsh`.
+
+#!mermaid
+
+flowchart LR
+    subgraph HOST["Windows host · VS Code · this notebook (pwsh kernel)"]
+        NB["compass.dib\nInvoke-Ubuntu"]
+    end
+    subgraph A["Route A · WSL2"]
+        WSL["Ubuntu-24.04\n~/mir-load  .venv  ~/.config/gcloud"]
+    end
+    subgraph B["Route B · Docker Desktop"]
+        IMG["image mrload-ubuntu\n/opt/venv · gcloud · dbt"]
+        VOL[("volume mrload-gcloud\nADC credentials")]
+        WIN["C:\\…\\mir-load (bind mount → /work)\n.env · .mrload/ state"]
+        DC["VS Code Dev Container\n(same image, same mounts)"]
+    end
+    NB -- "wsl.exe -d … -e bash -lc" --> WSL
+    NB -- "docker run --rm -v … bash -lc" --> IMG
+    IMG --- VOL
+    IMG --- WIN
+    DC --- VOL
+    DC --- WIN
+    WSL --> EXT
+    IMG --> EXT
+    subgraph EXT["external systems"]
+        GD["Google Drive\n30 Sales / 20 opportunities…"]
+        BQ["BigQuery\nmrload_raw · mrload (dbt)"]
+        HS["HubSpot SANDBOX\ncompanies · files · notes · deals"]
+    end
+
+#!mermaid
+
+flowchart TD
+    P["preflight\ntools · env · Drive root · token"] --> W["walk\nDrive DFS → .mrload/library_hierarchy.csv"]
+    W --> BI["bq-init\ndatasets + empty ledger tables"]
+    BI --> BL["bq-load  ⟨LIVE gate BQ_LOAD⟩\nCSV → mrload_raw.library_hierarchy"]
+    BL --> D["dbt run + test\ncardinality contract = the gate"]
+    D -- "any test fails → STOP, nothing else fires" --> X((stop))
+    D --> R["review\noperator queues · deal_decisions.csv"]
+    R --> C1["companies-dry"] --> C2["companies-live ⟨COMPANY_CREATE⟩"]
+    C2 --> A1["attach-dry"] --> A2["attach-upload ⟨FILES_UPLOAD⟩\nphase 1: Drive → HubSpot Files"]
+    A2 --> A3["attach-notes ⟨FILE_NOTES_POST⟩\nphase 2: note + association"]
+    A3 --> L["ledger-export ⟨BQ_LOAD⟩\nSQLite ledger → BigQuery → dbt build"]
+    L --> DD["deals-dry (pass 2, from the edited decisions file)"] --> DL["deals-live ⟨DEAL_CREATE⟩"]
+
+#!markdown
+
+## 0 · Switches and helpers — run this first, every time
+
+Edit the values, then run. `Invoke-Ubuntu '<bash command>'` runs one command line in the
+repo, inside the Ubuntu of the chosen route, with the venv active. `-Live` prepends
+`YES_ALL=1` (skips the runner's confirmation prompts) and only works when `$ConfirmLive` is true.
+`-Stdin '<text>'` pipes text into the command (used for secrets).
+
+`$env:WSL_UTF8 = '1'` matters: without it `wsl.exe` writes UTF‑16 when its output is
+captured, and every line in this notebook would come out as `g.a.r.b.l.e.d`.
+
+#!pwsh
+
+# ── switches ────────────────────────────────────────────────────────────────
+$Route       = 'wsl'                                   # 'wsl' | 'devcontainer' | 'linux'
+$Distro      = 'Ubuntu-24.04'                          # route wsl:  `wsl -l -v` shows the name
+$RepoWsl     = '~/mir-load'                            # route wsl:  clone on the LINUX side (never /mnt/c/…)
+$RepoWin     = "$HOME\mir-load"                        # route devcontainer: Windows-side clone (bind-mounted at /work)
+$Image       = 'mrload-ubuntu'                         # route devcontainer: built from scripts/dev/Dockerfile
+$RepoLinux   = '/workspaces/mir-load'                  # route linux: repo path when this notebook runs inside Ubuntu
+$Branch      = 'claude/mr-load-library-system-dphpbj'
+$Repo        = 'https://github.com/Wkayaobama/mir-load.git'
+$ConfirmLive = $false                                  # flip to $true ONLY when you intend BigQuery/HubSpot writes
+$env:WSL_UTF8 = '1'
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+function Invoke-Ubuntu {
+    param(
+        [Parameter(Mandatory, Position = 0)][string]$Command,
+        [switch]$Live,
+        [string]$Stdin
+    )
+    $prefix = ''
+    if ($Live) {
+        if (-not $ConfirmLive) { Write-Warning "LIVE step refused: set `$ConfirmLive = `$true in the Switches cell first. Not run: $Command"; return }
+        $prefix = 'YES_ALL=1 '
+    }
+    $venv = '{ [ -f .venv/bin/activate ] && . .venv/bin/activate; }; '
+    switch ($Route) {
+        'wsl' {
+            $exe  = 'wsl.exe'
+            $nativeArgs = @('-d', $Distro, '-e', 'bash', '-lc', "cd $RepoWsl && $venv$prefix$Command")
+        }
+        'devcontainer' {
+            $exe  = 'docker'
+            $nativeArgs = @('run', '--rm')
+            if ($PSBoundParameters.ContainsKey('Stdin')) { $nativeArgs += '-i' }
+            $nativeArgs += @('-v', "${RepoWin}:/work", '-v', 'mrload-gcloud:/root/.config/gcloud', '-w', '/work',
+                             '-e', 'MRLOAD_VENV=/opt/venv', $Image, 'bash', '-lc', "$prefix$Command")
+        }
+        'linux' {
+            $exe  = 'bash'
+            $nativeArgs = @('-lc', "cd $RepoLinux && $venv$prefix$Command")
+        }
+        default { throw "unknown route '$Route' (wsl | devcontainer | linux)" }
+    }
+    if ($PSBoundParameters.ContainsKey('Stdin')) { $Stdin | & $exe @nativeArgs } else { & $exe @nativeArgs }
+    if ($LASTEXITCODE -ne 0) { Write-Host "✖ exit code $LASTEXITCODE  [$Route]" -ForegroundColor Red }
+    else                     { Write-Host "✔ done  [$Route]" -ForegroundColor Green }
+}
+
+function Open-UbuntuTerminal {
+    # A real terminal in the route's Ubuntu — for the steps that need a keyboard (sudo password, OAuth code).
+    switch ($Route) {
+        'wsl'          { $cmd = 'wsl.exe'; $cargs = @('-d', $Distro, '--cd', '~') }
+        'devcontainer' { $cmd = 'docker';  $cargs = @('run', '-it', '--rm', '-v', "${RepoWin}:/work", '-v', 'mrload-gcloud:/root/.config/gcloud', '-w', '/work', $Image, 'bash') }
+        default        { Write-Host "route linux: you are already inside Ubuntu — use the VS Code terminal."; return }
+    }
+    if     (Get-Command wezterm -ErrorAction SilentlyContinue) { Start-Process wezterm -ArgumentList (@('start', '--', $cmd) + $cargs) }
+    elseif (Get-Command wt      -ErrorAction SilentlyContinue) { Start-Process wt      -ArgumentList (@($cmd) + $cargs) }
+    else                                                        { Start-Process $cmd    -ArgumentList $cargs }
+    Write-Host "terminal opened: $cmd $($cargs -join ' ')" -ForegroundColor Cyan
+}
+
+function Set-EnvKey {
+    # Masked prompt → value piped into scripts/dev/env_set.sh inside Ubuntu. Nothing is stored in this notebook.
+    param([Parameter(Mandatory)][string]$Key, [switch]$Plain)
+    if ($Plain) { $value = Read-Host "$Key" }
+    else {
+        $sec   = Read-Host -AsSecureString "$Key (hidden)"
+        $value = [System.Net.NetworkCredential]::new('', $sec).Password
+    }
+    if (-not $value) { Write-Warning "empty value — nothing written"; return }
+    Invoke-Ubuntu "scripts/dev/env_set.sh $Key" -Stdin $value
+    Remove-Variable value, sec -ErrorAction SilentlyContinue
+}
+
+function Show-Route {
+    "route        : $Route"
+    switch ($Route) {
+        'wsl'          { "distro       : $Distro`nrepo (linux) : $RepoWsl" }
+        'devcontainer' { "image        : $Image`nrepo (win)   : $RepoWin  → /work" }
+        'linux'        { "repo         : $RepoLinux" }
+    }
+    "branch       : $Branch"
+    "ConfirmLive  : $ConfirmLive   (LIVE cells " + $(if ($ConfirmLive) { 'WILL FIRE' } else { 'are blocked' }) + ")"
+}
+Show-Route
+
+#!markdown
+
+## 1 · Host prerequisites (Windows side)
+
+Nothing here is fatal on its own; it tells you which routes are open on this machine.
+`wsl` present → route A possible. `docker` present (Docker Desktop running) → route B possible.
+`dotnet` is what the notebook extension itself needs.
+
+#!pwsh
+
+foreach ($t in 'wsl', 'docker', 'git', 'code', 'wezterm', 'wt', 'dotnet') {
+    $c = Get-Command $t -ErrorAction SilentlyContinue
+    '{0,-8} {1}' -f $t, $(if ($c) { $c.Source } else { '— not on PATH' })
+}
+''
+'── WSL distros (VERSION must be 2) ──';        wsl.exe -l -v 2>$null
+'── Docker engine ──';                          docker version --format 'server {{.Server.Version}} ({{.Server.Os}})' 2>$null
+'── .NET SDKs (for Polyglot Notebooks) ──';     dotnet --list-sdks 2>$null
+'── git line-ending setting on Windows ──';     'core.autocrlf = ' + (git config --global core.autocrlf)
+'   (any value is fine: the repo''s .gitattributes pins LF for scripts; section 2/3 verifies the checkout)'
+
+#!markdown
+
+---
+# Route A · WSL2 (local IDE, no Docker)
+
+**Why WSL:** the clone lives on the Linux filesystem (`~/mir-load`), so the venv, the
+SQLite ledger and the Drive download cache are fast and Linux-owned. VS Code opens the folder
+through the *WSL* extension (`code --remote wsl+Ubuntu-24.04 …`) and runs Python, pytest and
+the tasks inside the distro. Nothing from this route is visible to Windows Git, so a token in
+`~/mir-load/.env` cannot be picked up by a Windows-side checkout by accident.
+
+Skip to **Route B** if you prefer Docker. Both routes converge at **section 4 · .env clinic**.
+
+### A1 · Install the distro (once)
+
+`wsl --install` needs an elevated prompt (UAC will ask). It reboots the machine once, then
+on first start Ubuntu asks for a **Linux username and password** — that password is the
+`sudo` password the bootstrap asks for in A4. If `wsl -l -v` already shows the distro as
+VERSION 2, skip this cell.
+
+#!pwsh
+
+wsl.exe --install -d $Distro          # once; reboot when asked, then start the distro once to create your Linux user
+wsl.exe --set-default $Distro
+wsl.exe -l -v
+
+#!markdown
+
+### A2 · Clone on the Linux side and check out the working branch
+
+This runs `git` **inside** the distro, so the clone lands at `~/mir-load` with LF endings
+regardless of any Windows Git setting. If the repository is private, Linux `git` will ask
+for credentials and this cell will hang — run the same line in a terminal instead
+(`Open-UbuntuTerminal`), or point WSL git at Windows' credential manager once:
+`git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"`.
+
+#!pwsh
+
+wsl.exe -d $Distro -e bash -lc "if [ -d $RepoWsl/.git ]; then echo 'clone present'; else git clone $Repo $RepoWsl; fi && cd $RepoWsl && git fetch -q origin $Branch && git checkout -q $Branch && git pull -q --ff-only origin $Branch && echo 'HEAD:' && git log --oneline -1"
+
+#!markdown
+
+### A3 · Line-ending sanity
+
+Expected: `✔ checkout is LF-clean`. A CRLF checkout is the single most common reason a bash
+script "does not exist" or dies on `set -euo pipefail\r`. The script prints the one-time fix if needed.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/crlf_check.sh'
+
+#!markdown
+
+### A4 · Bootstrap — **TERMINAL**
+
+`scripts/bootstrap_ubuntu.sh` installs apt packages, the Google Cloud CLI (`gcloud`, `bq`),
+creates `.venv`, installs the Python requirements (dbt-bigquery included), runs the unit
+tests and creates `.env` from the template. It calls `sudo apt-get` itself, and `sudo` asks
+for your Linux password on a terminal — that is why it cannot run from this cell.
+
+Two rules that came from real mistakes:
+- Run it **inside Ubuntu**. "Sudo is disabled on this machine" means the command ran in
+  Git Bash/PowerShell on Windows (that sentence is Windows 11's own `sudo.exe`).
+- Run it **without** `sudo bash …` — the script elevates only `apt`; the venv and `.mrload/`
+  must stay owned by you, and the script refuses to run as root.
+
+The cell opens the terminal; paste the two lines it prints. `--no-rehearsal` skips the 30 s
+mock rehearsal (run it later from section 8 if you like).
+
+#!pwsh
+
+Open-UbuntuTerminal
+@"
+
+paste into the Ubuntu terminal that just opened:
+
+    cd $RepoWsl
+    bash scripts/bootstrap_ubuntu.sh --no-rehearsal
+
+"@
+
+#!markdown
+
+### A5 · Verify the bootstrap
+
+Expected: a Python 3.x from `.venv`, a gcloud version line, `bq` and `dbt` versions and
+`… passed` from pytest. Anything missing → re-run A4 and read its first ✖ line.
+
+#!pwsh
+
+Invoke-Ubuntu 'which python && python --version && gcloud --version | head -1 && bq version 2>/dev/null | head -1 && dbt --version | sed -n 1,2p && python -m pytest tests -q --ignore=tests/e2e 2>&1 | tail -1'
+
+#!markdown
+
+### A6 · Open the WSL clone in VS Code (optional, for breakpoints and tasks)
+
+Opens a VS Code window connected to the distro. Interpreter, tasks (`Ctrl+Shift+P` → *Tasks:
+Run Task* → `mr-load: …`) and launch configurations come from the repo's `.vscode/`.
+Do **not** open `\\wsl$\…\mir-load` as a plain Windows folder: Windows editors would write
+CRLF into `.env` and scripts.
+
+#!pwsh
+
+$linuxHome = (wsl.exe -d $Distro -e bash -lc 'echo $HOME' | Select-Object -First 1).Trim()
+$folder    = $RepoWsl -replace '^~', $linuxHome
+code --remote "wsl+$Distro" $folder
+"opened $folder in VS Code (WSL: $Distro)"
+
+#!markdown
+
+---
+# Route B · Docker Desktop → Dev Container
+
+**Why Docker:** one image (`scripts/dev/Dockerfile`, Ubuntu 24.04 + gcloud/bq + venv baked at
+`/opt/venv`) that behaves identically on any laptop and matches the VM/Cloud Shell routes.
+The repo stays on Windows and is bind-mounted at `/work`; gcloud credentials live in the
+named volume `mrload-gcloud`, so you log in **once** and both the `docker run` cells below and
+the VS Code Dev Container see the same credentials.
+
+Two things to know on this route:
+- The Windows checkout **must be LF** (B3 checks; the image strips `\r` from the bootstrap, and
+  `scripts/ubuntu_shell.sh` refuses a CRLF checkout — same protection, host side).
+- `.env` sits on NTFS. `chmod 600` has no effect through the mount, so the clinic reports the
+  mode as "not enforceable here" — expected. The file is still git-ignored and hook-guarded.
+
+Set `$Route = 'devcontainer'` in the Switches cell (and re-run it) before the cells below.
+
+### B1 · Clone on the Windows side
+
+#!pwsh
+
+if ($Route -ne 'devcontainer') { Write-Warning "Switches cell says Route='$Route' — set it to 'devcontainer' and re-run it" }
+if (-not (Test-Path "$RepoWin\.git")) { git clone $Repo $RepoWin }
+git -C $RepoWin fetch -q origin $Branch
+git -C $RepoWin checkout -q $Branch
+git -C $RepoWin pull -q --ff-only origin $Branch
+'HEAD: ' + (git -C $RepoWin log --oneline -1)
+
+#!markdown
+
+### B2 · Build the image (once; minutes the first time, seconds after)
+
+Same Dockerfile the Dev Container uses. Rebuild after `requirements*.txt` changes.
+
+#!pwsh
+
+docker build -t $Image -f "$RepoWin\scripts\dev\Dockerfile" $RepoWin
+docker image inspect $Image --format 'image {{.RepoTags}} built {{.Created}}'
+
+#!markdown
+
+### B3 · Line-ending sanity of the Windows checkout
+
+Expected `✔ checkout is LF-clean`. If not, the next cell applies the one-time fix — it runs
+`git reset --hard`, so it refuses while you have uncommitted changes.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/crlf_check.sh'
+
+#!pwsh
+
+# one-time LF fix for a clone made before .gitattributes existed (only if B3 reported CRLF)
+if (git -C $RepoWin status --porcelain) { Write-Warning "uncommitted changes in $RepoWin — commit or stash first; not touching the checkout" }
+else {
+    git -C $RepoWin add --renormalize .
+    git -C $RepoWin rm -r -q --cached .
+    git -C $RepoWin reset -q --hard
+    Invoke-Ubuntu 'scripts/dev/crlf_check.sh'
+}
+
+#!markdown
+
+### B4 · Verify the image
+
+Expected: python from `/opt/venv`, gcloud, bq, dbt, and pytest `… passed`.
+
+#!pwsh
+
+Invoke-Ubuntu 'which python && python --version && gcloud --version | head -1 && bq version 2>/dev/null | head -1 && dbt --version | sed -n 1,2p && python -m pytest tests -q --ignore=tests/e2e 2>&1 | tail -1'
+
+#!markdown
+
+### B5 · The VS Code Dev Container (optional, for breakpoints and tasks)
+
+`code <clone>` then `F1` → **Dev Containers: Reopen in Container**. VS Code builds the same
+Dockerfile, mounts the repo and the `mrload-gcloud` volume, and runs
+`scripts/bootstrap_ubuntu.sh --no-rehearsal` as the post-create step (unit tests, `.env` from
+the template). The status bar shows `Dev Container: mr-load`; the terminal is Ubuntu bash.
+`.devcontainer/devcontainer.json` also installs the .NET SDK feature, so this very notebook can
+be opened inside the container — then use `$Route = 'linux'`.
+
+#!pwsh
+
+code $RepoWin
+"VS Code opened on $RepoWin → F1 → 'Dev Containers: Reopen in Container'"
+
+#!markdown
+
+---
+# 4 · `.env` clinic — configure secrets without ever committing them
+
+**Precedence** (`scripts/run_pass1.sh`, `gauth.sh`, `auth_check.sh` all follow it):
+process env **>** `.env` (in the repo) **>** `.env.mrload` **>** `../.env.mrload`. Files never
+override a variable already present in the process environment, so `VAR=x scripts/run_pass1.sh …`
+and CI always win.
+
+**Required keys:** `MRLOAD_BQ_PROJECT` (BigQuery project; also the quota project for Drive calls)
+and `HUBSPOT_SANDBOX_TOKEN` (`pat-eu1-…` / `pat-na1-…`, private app with files + companies +
+notes + deals scopes). Set `HUBSPOT_SANDBOX_PORTAL_ID` too: `preflight` resolves the token to a
+portal id and **dies** if it is `9201667` (WISeKey SA / ICALPS **production**, unless
+`MRLOAD_ALLOW_PROD_PORTAL=1`) or if it differs from the id you configured — a copied token
+cannot hit the wrong portal. The clinic and the auth check flag the same two conditions.
+
+**What the clinic checks** (masked output only): which env files exist and win; missing keys;
+template placeholders left in place; CRLF line endings (a Windows editor turns
+`MRLOAD_BQ_PROJECT=x` into `x\r` → gcloud says "project not found"); file mode; and git safety
+(`.gitignore` rule, nothing tracked or staged, pre-commit guard present). `--fix` creates
+`.env` from the template, strips CRLF and sets mode 600.
+
+### 4.1 · First pass with `--fix`
+
+Expected on a fresh machine: `created .env from .env.mrload.example`, then ✖ for the two
+placeholders. That is the "to-do list" the next cells clear.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/env_clinic.sh --fix'
+
+#!markdown
+
+### 4.2 · Enter the values (masked prompts)
+
+Each cell shows a prompt at the top of VS Code. The token prompt is masked; the value is
+piped into `scripts/dev/env_set.sh`, which replaces the key's line in `.env` (uncommenting the
+template line if that is all there is), writes LF only, and prints just the key and the length.
+
+If the prompt does not appear on your build of the extension, run the same thing in a terminal
+(`Open-UbuntuTerminal`, then `scripts/dev/env_set.sh HUBSPOT_SANDBOX_TOKEN` — it asks silently).
+
+#!pwsh
+
+Set-EnvKey MRLOAD_BQ_PROJECT -Plain
+
+#!pwsh
+
+Set-EnvKey HUBSPOT_SANDBOX_TOKEN
+
+#!pwsh
+
+Set-EnvKey HUBSPOT_SANDBOX_PORTAL_ID -Plain
+
+#!markdown
+
+Other keys use the same helper, e.g. `Set-EnvKey MRLOAD_BQ_LOCATION -Plain` or, for the
+service-account alternative to `gauth.sh`, `Set-EnvKey GOOGLE_APPLICATION_CREDENTIALS -Plain`
+with a path **inside Ubuntu** (`/home/<you>/keys/sa.json` on WSL, `/work/…` on Docker — and the
+scope root folder must be shared with the service-account email, otherwise the walk is silently empty).
+
+### 4.3 · Second pass — must be clean
+
+Expected: every REQUIRED line ✔, `0 blocking issue(s)`. On the Docker route a single ⚠ about
+the file mode is expected (NTFS through the mount).
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/env_clinic.sh'
+
+#!markdown
+
+### 4.4 · Git safety: install the guard and prove it
+
+The pre-commit hook refuses any staged `.env*` (except `.env.mrload.example`) and any staged
+content that looks like a HubSpot token, a Google API key, an OAuth access token or a
+service-account `"private_key"`. The second cell (`scripts/dev/guard_proof.sh`) prints the
+`.gitignore` rule that matches `.env` (so a plain `git add .` can never pick it up), counts
+tracked env files (0), then force-stages `.env`, tries to commit, expects the hook to refuse,
+and unstages the file again. Expected last line: `✔ commit refused by the guard (rc=1)`.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/install_git_hooks.sh'
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/guard_proof.sh'
+
+#!markdown
+
+---
+# 5 · Google authentication (Drive + BigQuery, as you) — **TERMINAL**, then a check cell
+
+`scripts/gauth.sh` does, in order: `gcloud config set project $MRLOAD_BQ_PROJECT` →
+`gcloud auth login --enable-gdrive-access --update-adc` → `gcloud auth application-default
+set-quota-project $MRLOAD_BQ_PROJECT` → enable the Drive and BigQuery APIs → a live GET of the
+scope root folder and a `select 1` on BigQuery.
+
+Why that exact sequence: `gcloud auth application-default login --scopes=…drive…` is
+**rejected** by Google for gcloud's own OAuth client (you saw the permission error); the
+`--enable-gdrive-access --update-adc` form is allowed and writes the Drive-scoped user
+credentials to the same ADC file the pipeline reads. User credentials calling a non-Cloud API
+(Drive) need a **quota project**, or the first call fails with "requires a quota project".
+
+It prints a URL to open in your normal browser and asks you to paste the code back — a
+terminal step. Where the credentials land: WSL → `~/.config/gcloud/` in the distro;
+Docker → the `mrload-gcloud` volume (shared with the Dev Container).
+
+#!pwsh
+
+Open-UbuntuTerminal
+$cd = if ($Route -eq 'wsl') { "cd $RepoWsl`n    " } else { '' }
+@"
+
+paste into the Ubuntu terminal:
+
+    ${cd}scripts/gauth.sh
+
+answer the consent screen fully (BigQuery AND Drive), paste the code back, wait for '✔ Drive OK' and '✔ BigQuery OK'.
+
+"@
+
+#!markdown
+
+### 5.1 · Non-interactive credential check (re-run any time something "stopped working")
+
+Expected: active account (masked), core/project = `MRLOAD_BQ_PROJECT`, ADC with a quota project,
+`Drive: scope root readable → 20 opportunities and customer data`, `BigQuery: query OK`, and the
+HubSpot portal id from the token (must **not** be 9201667).
+
+| symptom | meaning | fix |
+|---|---|---|
+| `requires a quota project` | ADC has no quota project | re-run `gauth.sh` (step 3) |
+| `insufficientPermissions` / `ACCESS_TOKEN_SCOPE_INSUFFICIENT` | consent screen accepted without Drive | re-run `gauth.sh`, tick both scopes |
+| Drive `404` on the root | this Google account cannot see the folder | log in with the account that owns the Drive |
+| `accessNotConfigured` | Drive API disabled on the project | `gcloud services enable drive.googleapis.com --project=<MRLOAD_BQ_PROJECT>` |
+| HubSpot `401` | token wrong/expired or copied with CRLF | 4.2 again, then 4.3 |
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/auth_check.sh'
+
+#!markdown
+
+---
+# 6 · Pass 1 — the pipeline, step by step
+
+Every step is `scripts/run_pass1.sh <step>`: idempotent, logged to `.mrload/logs/<step>-<ts>.log`,
+and every **LIVE** step first re-runs its dry counterpart and asks for confirmation (`-Live`
+answers yes through `YES_ALL=1`, and only when `$ConfirmLive` is true). Gates are set inline by
+the script, never exported globally, so a stray shell can never fire a write.
+
+### 6.0 · preflight
+Verifies tools, `.env`, Drive access to the scope root, the HubSpot token and portal, BigQuery
+access. Expected: only ✔ lines.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh preflight'
+
+#!markdown
+
+### 6.1 · walk — Drive API depth-first walk → `.mrload/library_hierarchy.csv`
+Pre-order DFS from the scope root (`30 Sales / 20 opportunities and customer data`), excluding
+`70 Tradeshows`; every node gets `node_key` / `parent_key` (path as index), the company
+node key, the legacy id (`3020Q…`) and an asset class (`deal_candidate` for PO/Billing PDFs,
+`parked_for_review` for other PDFs, `shortcut`, `asset`). Also writes `silver_preview.csv`
+(the 19-column icalps-parity preview, offline). Expected: a node count and no `ERROR`.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh walk'
+Invoke-Ubuntu 'wc -l .mrload/library_hierarchy.csv .mrload/silver_preview.csv && head -3 .mrload/library_hierarchy.csv | cut -c1-160'
+
+#!markdown
+
+### 6.2 · bq-init — datasets and empty ledger tables (so dbt sources resolve)
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh bq-init'
+
+#!markdown
+
+### 6.3 · bq-load — **LIVE** (gate `MRLOAD_APPROVE_BQ_LOAD`)
+Loads the hierarchy CSV into `mrload_raw.library_hierarchy` with the positional schema
+`pipeline/library_files/sql/library_hierarchy.schema.json`. Re-runnable (truncate + load).
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh bq-load' -Live
+
+#!markdown
+
+### 6.4 · dbt — run + test: **the cardinality gate**
+Builds `stg_library_hierarchy`, `silver_library_company`, `silver_library_index`,
+`_deal_candidates`, `_parked`, `_orphans` on BigQuery and runs the contract tests (unique
+node keys, every parent exists, one company per company node, …). **If any test fails, stop
+here** — nothing downstream fires until the index is right. `scripts/dev/dbt_failures.sh`
+(section 9) lists the failing nodes and their compiled SQL.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh dbt'
+
+#!markdown
+
+### 6.5 · review — operator queues (offline)
+Writes `.mrload/review/`: `companies.csv` (the company objects that will be searched or
+created — names are folder names), `deal_candidates.csv` (PO / Billing PDFs, pass 2),
+`parked_for_review.csv` (other PDFs), `orphans.csv` (files with no company folder, never
+attached), `multi_parent.csv` (files linked into two or more folders — must be empty before
+going live) and the `deal_decisions.csv` template you edit before pass 2.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh review && ls -l .mrload/review/'
+
+#!markdown
+
+### 6.6 · companies — dry, then **LIVE** (gate `MRLOAD_APPROVE_COMPANY_CREATE`)
+Dry: search-only resolution of every company folder against HubSpot (found / to-create
+report, ledger `companies_resolved`). Live: creates the missing companies.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh companies-dry'
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh companies-live' -Live
+
+#!markdown
+
+### 6.7 · attach — dry, then the two **LIVE** phases
+Dry: row count per company, nothing fired. `attach-upload` (gate `MRLOAD_APPROVE_FILES_UPLOAD`)
+downloads each Drive file (native Google docs exported) and uploads it to HubSpot Files with
+retry/back-off (ledger `files_uploaded`). `attach-notes` (gate `MRLOAD_APPROVE_FILE_NOTES_POST`)
+creates one note per file and associates it with the company (ledger `file_notes_posted`).
+Both are resumable: the ledger skips what is already done.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh attach-dry'
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh attach-upload' -Live
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh attach-notes' -Live
+
+#!markdown
+
+### 6.8 · ledger-export — **LIVE** (gate `MRLOAD_APPROVE_BQ_LOAD`)
+Exports the SQLite ledger to CSV, loads it into `mrload_raw.*` and runs `dbt build`, so the
+index in BigQuery carries the HubSpot ids and statuses.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh ledger-export' -Live
+
+#!markdown
+
+### 6.9 · status — what exists, and the ledger counts by status
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh status'
+
+#!markdown
+
+---
+# 7 · Pass 2 — deals from PO / Billing PDFs (only after you edited the decisions file)
+
+Edit `.mrload/review/deal_decisions.csv` (VS Code, Rainbow CSV): keep/skip per candidate,
+amounts, pipeline/stage overrides. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh deals-dry'
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh deals-live' -Live
+
+#!markdown
+
+---
+# 8 · Rehearsals and tests — no credentials needed
+
+- **unit tests**: the walker, card, hierarchy writer, ledger, uploader, companies, deals.
+- **e2e rehearsal (clean)**: the real code against local stand-ins — a Drive v3 mock, a HubSpot
+  mock that returns one 429, a `bq` stub that validates schema/types, dbt on DuckDB — driving
+  `scripts/run_pass1.sh` step by step. Expected: `28/28 checks` in `.mrload/rehearsal/REPORT.md`.
+- **e2e rehearsal (dirty)**: a broken tree; expected outcome is a **stop at the dbt gate** with
+  zero HubSpot writes — that is the contract working.
+
+#!pwsh
+
+Invoke-Ubuntu 'python -m pytest tests -q --ignore=tests/e2e'
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/e2e_rehearsal.sh | tail -5'
+
+#!pwsh
+
+Invoke-Ubuntu 'SCENARIO=dirty scripts/e2e_rehearsal.sh | tail -8'
+
+#!markdown
+
+---
+# 9 · Troubleshooting from here
+
+| symptom | look at |
+|---|---|
+| a step died | the newest log (cell below); the first ✖ line is the cause |
+| dbt gate failed | `scripts/dev/dbt_failures.sh` → failing node + compiled SQL path; open the SQL and run it in the BigQuery console |
+| walk returns 0 nodes | account cannot see the root (5.1), or the root id in `context/cards/library.yaml` |
+| HubSpot 401 / wrong portal | 5.1 and the clinic (4.3): CRLF, placeholder, prod portal |
+| "project not found" from gcloud | CRLF in `.env` → `env_clinic.sh --fix` |
+| `\r: command not found` | CRLF checkout → A3 / B3 |
+| scripts fine in WSL but not from Git Bash | you are on Windows; every command in this notebook already targets Ubuntu |
+| Sudo is disabled on this machine | Windows `sudo.exe` — run the bootstrap inside Ubuntu (A4) |
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/last_log.sh 40'
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/dev/dbt_failures.sh'
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh status'
+
+#!markdown
+
+### Rollback (**LIVE**, gate `MRLOAD_APPROVE_UNMIGRATE`)
+Deletes every **note** this pipeline attached, using the ledger as the index (the runner lists
+them first and asks). Uploaded files, companies and deals are not touched by this step.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh unmigrate' -Live
+
+#!markdown
+
+---
+# 10 · From sandbox to production — when you decide so
+
+1. Keep the variable name: `HUBSPOT_SANDBOX_TOKEN` holds whichever portal's token you are
+   targeting (`Set-EnvKey HUBSPOT_SANDBOX_TOKEN`, `Set-EnvKey HUBSPOT_SANDBOX_PORTAL_ID -Plain`).
+2. Keep the ledgers apart, so the sandbox ledger can never mark a production file as "already
+   uploaded": `Set-EnvKey MRLOAD_STATE_DIR -Plain` → `.mrload-prod`, and the same tree for
+   `MRLOAD_LEDGER_PATH` (`.mrload-prod/ledger.sqlite`) and `MRLOAD_CACHE_DIR` (`.mrload-prod/cache`),
+   because the template sets those two explicitly.
+3. Re-run 5.1 (`auth_check.sh`) — it prints the portal id the token resolves to. If production is
+   portal 9201667, `preflight` stops until `MRLOAD_ALLOW_PROD_PORTAL=1` is in `.env`
+   (`Set-EnvKey MRLOAD_ALLOW_PROD_PORTAL -Plain`): the guard exists to stop the copied-token
+   mistake, not to forbid a deliberate choice — but the choice is made in `.env`, on purpose.
+4. Run section 6 again from `preflight`, dry steps first, `$ConfirmLive` last.

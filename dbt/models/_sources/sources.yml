@@ -1,0 +1,43 @@
+version: 2
+
+sources:
+  - name: mrload_raw
+    description: "Bronze — walker output loaded by `runner bq-load` (pipeline/library_files/hierarchy.py)"
+    schema: "{{ var('raw_dataset') }}"
+    tables:
+      - name: library_hierarchy
+        description: "One row per walked Drive node: NodeKey/ParentKey/Depth + Drive metadata + classification"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_HIERARCHY_CSV', '../.mrload/library_hierarchy.csv') }}', header=true)"
+        config:
+          loaded_at_field: walked_at
+        columns:
+          - name: node_key
+            description: "Primary key — '|'-joined legacy path incl. node name"
+          - name: parent_key
+            description: "FK → node_key of the parent (NULL at depth 1)"
+          - name: company_node_key
+            description: "FK → node_key of the anchoring company folder (Library → Company N:1)"
+          - name: parents_count
+            description: "Number of Drive parents; > 1 is a DAG violation of the tree assumption"
+
+  - name: mrload_ledger
+    description: "Step 6 — runner ledger exported by `runner ledger-export` (HubSpot ids written back)"
+    schema: "{{ var('raw_dataset') }}"
+    tables:
+      - name: companies_resolved
+        description: "company_node_key → hs_company_id (search/create outcome)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/companies_resolved.csv', header=true, all_varchar=true)"
+      - name: files_uploaded
+        description: "legacy_library_id → hs_file_id (attach phase 1)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/files_uploaded.csv', header=true, all_varchar=true)"
+      - name: file_notes_posted
+        description: "legacy_library_id → hs_note_id (attach phase 2)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/file_notes_posted.csv', header=true, all_varchar=true)"
+      - name: deals_created
+        description: "legacy_library_id → hs_deal_id (pass 2)"
+        meta:
+          external_location: "read_csv_auto('{{ env_var('MRLOAD_LEDGER_EXPORT_DIR', '../.mrload/ledger_export') }}/deals_created.csv', header=true, all_varchar=true)"

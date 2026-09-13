@@ -1,0 +1,37 @@
+name: 'mr_load_library'
+version: '1.0.0'
+config-version: 2
+profile: 'mr_load_bigquery'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+vars:
+  raw_dataset: 'mrload_raw'
+  # Mirrors context/cards/library.yaml scope.exclude_segments (BigQuery RE2 syntax).
+  excluded_segment_regex: '(?i)(^70([^0-9]|$)|tradeshow|^events & tradeshows$)'
+  # DuckDB rehearsal target reads the walker/ledger CSVs directly via env vars
+  # MRLOAD_HIERARCHY_CSV / MRLOAD_LEDGER_EXPORT_DIR (see models/_sources/sources.yml).
+  deal_candidate_regex: '(?i)(^|[^a-z0-9])(PO|Billing)([^a-z0-9]|$)'
+
+models:
+  mr_load_library:
+    staging:
+      +materialized: view
+    silver:
+      +materialized: table
+      silver_library_company:
+        +contract:
+          enforced: "{{ (env_var('MRLOAD_DBT_CONTRACTS', 'true') | lower == 'true') | as_bool }}"
+
+dispatch:
+  - macro_namespace: dbt
+    search_order: ['mr_load_library', 'dbt']
