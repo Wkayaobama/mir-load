@@ -144,6 +144,19 @@ check("pass 2: deal→company and note→deal associations per deal",
       len(deal_assoc_co) == 4 and len(note_assoc_deal) == 4)
 check("pass 2: hs_deal_id visible in silver_library_deal_candidates", n_deal == 4, str(n_deal))
 
+# 8. sequence bookkeeping: checkpoints + pipeline_state (what the run-sheet notebook reads)
+ck = [l.split("\t") for l in (R / "checkpoints.tsv").read_text().splitlines()]
+ran = [c[1] for c in ck if c[2] == "0"]
+expected = ["preflight", "walk", "bq-init", "bq-load", "hs-props", "hs-props", "dbt", "hs-props-verify", "review",
+            "companies-dry", "companies-live", "attach-dry", "attach-upload", "attach-notes", "attach-notes",
+            "ledger-export", "deals-dry", "deals-live", "ledger-export"]   # live steps checkpoint their dry counterpart first
+check("checkpoints: every step run recorded rc=0, in the executed order",
+      ran == expected and all(c[2] == "0" for c in ck), " ".join(ran))
+ps = jload(R / "pipeline_state.json")
+check("pipeline_state: all 16 steps done, next = none (pass 1 + pass 2 complete, deal ids written back)",
+      ps["next"] is None and all(s["status"] == "done" for s in ps["steps"]) and len(ps["steps"]) == 16,
+      f"next={ps['next']} {ps['why']}")
+
 s2, n2 = dbt_summary(R / "dbt_build_final.json")
 check(f"dbt final build after write-back: {n2} tests, 0 fail/error", s2["fail"] == 0 and s2["error"] == 0, str(s2))
 

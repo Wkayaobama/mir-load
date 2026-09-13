@@ -516,6 +516,21 @@
         "clear": true
       },
       "detail": ".mrload/logs/<step>-<timestamp>.log — the first ✖ line is the cause"
+    },
+    {
+      "label": "mr-load: pipeline state (where am I / what is next)",
+      "type": "shell",
+      "command": "bash scripts/dev/pipeline_state.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "checkpoints.tsv + artefacts → done / stale / failed / pending per step, and the next step in order"
     }
   ]
 }

@@ -76,7 +76,7 @@ ts() { date -u +%Y%m%dT%H%M%SZ; }
 say() { printf '\n\033[1;36m▶ %s\033[0m\n' "$*"; }
 ok()  { printf '\033[1;32m✔ %s\033[0m\n' "$*"; }
 warn(){ printf '\033[1;33m⚠ %s\033[0m\n' "$*"; }
-die() { printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; exit 1; }
+die() { printf '\033[1;31m✖ %s\033[0m\n' "$*" >&2; DIE_MSG="$*"; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "missing tool: $1 ($2)"; }
 confirm() {  # confirm "<question>"  — honours --yes
   [[ $YES -eq 1 ]] && return 0
@@ -98,6 +98,14 @@ import sqlite3, sys
 con = sqlite3.connect(sys.argv[1]); print(con.execute(sys.argv[2]).fetchall())
 EOF
 }
+
+# ── checkpoints: every step run lands in $STATE/checkpoints.tsv (ts, step, rc, message) ─
+# scripts/dev/pipeline_state.sh reads it (with the artefacts) to answer "where am I / what is next",
+# including staleness: a step re-run after its successors makes them pending again.
+CHECKPOINTS="$STATE/checkpoints.tsv"; CURRENT_STEP=""; DIE_MSG=""
+checkpoint() { printf '%s\t%s\t%s\t%s\n' "$(ts)" "$1" "$2" "${3:-}" >>"$CHECKPOINTS"; }
+run_step() { CURRENT_STEP="$1"; "step_${1//-/_}"; checkpoint "$1" 0 "ok"; }
+trap '_rc=$?; [[ $_rc -ne 0 && -n "$CURRENT_STEP" ]] && checkpoint "$CURRENT_STEP" "$_rc" "${DIE_MSG:-failed}"; exit $_rc' EXIT
 
 # ── steps ────────────────────────────────────────────────────────────────────
 step_preflight() {
@@ -275,7 +283,7 @@ EOF
 }
 
 step_companies_live() {
-  step_companies_dry
+  run_step companies-dry; CURRENT_STEP=companies-live   # the dry counterpart is a real run: checkpoint it, then own the failure again
   local n; n=$(count_json "$STATE/companies_dry.json" "sum(1 for r in d if r['status']=='would_create')")
   local amb; amb=$(count_json "$STATE/companies_dry.json" "sum(1 for r in d if r['status']=='ambiguous_match')")
   [[ "$amb" == "0" ]] || die "$amb ambiguous company names — resolve them in HubSpot first"
@@ -293,7 +301,7 @@ step_attach_dry() {
 }
 
 step_attach_upload() {
-  step_attach_dry
+  run_step attach-dry; CURRENT_STEP=attach-upload   # the dry counterpart is a real run: checkpoint it, then own the failure again
   say "4b/attach-upload — phase 1: download from Drive on demand → POST /files/v3/files"
   confirm "Upload $(count_json "$STATE/attach_dry.json" 'len(d)') files to HubSpot Files (/mrload_library, PRIVATE)?"
   MRLOAD_APPROVE_FILES_UPLOAD=1 logrun attach-upload $RUNNER attach --hierarchy "$HIER" --ledger "$LEDGER" >"$STATE/attach_upload.json" || true
@@ -332,7 +340,7 @@ step_deals_dry() {
 }
 
 step_deals_live() {
-  step_deals_dry
+  run_step deals-dry; CURRENT_STEP=deals-live   # the dry counterpart is a real run: checkpoint it, then own the failure again
   local n; n=$(count_json "$STATE/deals_dry.json" "sum(1 for r in d if r['status']=='would_create')")
   confirm "Create $n deals, associate deal → company and note → deal?"
   MRLOAD_APPROVE_DEAL_CREATE=1 logrun deals-live $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --ledger "$LEDGER" >"$STATE/deals_live.json" || true
@@ -358,22 +366,16 @@ step_status() {
 }
 
 step_all() {
-  step_preflight; step_walk; step_bq_init; step_bq_load; step_hs_props; step_dbt; step_hs_props_verify; step_review
-  step_companies_live; step_attach_upload; step_attach_notes; step_ledger_export
-  step_status
+  local st
+  for st in preflight walk bq-init bq-load hs-props dbt hs-props-verify review \
+            companies-live attach-upload attach-notes ledger-export; do run_step "$st"; done
+  CURRENT_STEP="all"; step_status
   echo; ok "pass 1 complete. Pass 2: edit $REVIEW/deal_decisions.csv then 'deals-dry' / 'deals-live'."
 }
 
 case "${1:-}" in
-  preflight) step_preflight ;;      walk) step_walk ;;
-  bq-init) step_bq_init ;;          bq-load) step_bq_load ;;
-  dbt) step_dbt ;;                  review) step_review ;;
-  hs-props) step_hs_props ;;        hs-props-verify) step_hs_props_verify ;;
-  companies-dry) step_companies_dry ;; companies-live) step_companies_live ;;
-  attach-dry) step_attach_dry ;;    attach-upload) step_attach_upload ;;
-  attach-notes) step_attach_notes ;; ledger-export) step_ledger_export ;;
-  deals-dry) step_deals_dry ;;      deals-live) step_deals_live ;;
-  unmigrate) step_unmigrate ;;      status) step_status ;;
-  all) step_all ;;
+  preflight|walk|bq-init|bq-load|dbt|review|hs-props|hs-props-verify|companies-dry|companies-live|\
+  attach-dry|attach-upload|attach-notes|ledger-export|deals-dry|deals-live|unmigrate|all) run_step "$1" ;;
+  status) step_status ;;
   *) sed -n '2,32p' "$0"; exit 2 ;;
 esac

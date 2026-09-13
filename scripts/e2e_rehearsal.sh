@@ -57,4 +57,5 @@ EOF
 $RUN deals-live
 $RUN ledger-export;   cp dbt/target/run_results.json "$R/dbt_build_final.json"
 $RUN status
+scripts/dev/pipeline_state.sh; scripts/dev/pipeline_state.sh --json >"$R/pipeline_state.json"
 python3 scripts/e2e/report.py "$R" "http://127.0.0.1:$P2"

@@ -1,0 +1,285 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"pwsh","items":[{"aliases":[],"languageName":"PowerShell","name":"pwsh"},{"aliases":[],"languageName":"Mermaid","name":"mermaid"}]}}
+
+#!markdown
+
+# mr-load run sheet — the sequence, nothing else
+
+The compass notebook (`mr-load-compass.dib`) is for setting a machine up once: routes, `.env`
+clinic, Google login. This one assumes that is done and answers three questions every time you
+sit down: **where am I, what is next, run it.** Sixteen steps, one cell each, in the only order
+that is valid. Every step is idempotent (`scripts/run_pass1.sh`), records a checkpoint in
+`.mrload/checkpoints.tsv`, and the state cell reads those checkpoints back.
+
+| # | step | gate | what must be true afterwards |
+|---|---|---|---|
+| 1 | `preflight` | | tools, `.env`, Drive root visible, token → sandbox portal, BigQuery reachable |
+| 2 | `walk` | | `.mrload/library_hierarchy.csv` written, node count plausible, no ERROR |
+| 3 | `bq-init` | | datasets + empty ledger tables exist |
+| 4 | `bq-load` | LIVE `BQ_LOAD` | `mrload_raw.library_hierarchy` replaced with the CSV |
+| 5 | `hs-props` | LIVE `PROPERTY_CREATE` | property definitions exist in the portal (`exists`/`created`, no `type_mismatch`) |
+| 6 | `dbt` | | **0 FAIL** — the cardinality gate; WARN on orphans is allowed |
+| 7 | `hs-props-verify` | | every mapping row `ok` → `.mrload/review/stacksync_mapping.csv` (StackSync UI) |
+| 8 | `review` | | queues written; `multi_parent.csv` empty; `deal_decisions.csv` ready to edit |
+| 9 | `companies-dry` | | `ambiguous_match = 0` |
+| 10 | `companies-live` | LIVE `COMPANY_CREATE` | ledger `companies_resolved` populated |
+| 11 | `attach-dry` | | row count = files under resolved companies |
+| 12 | `attach-upload` | LIVE `FILES_UPLOAD` | ledger `files_uploaded` all `uploaded` |
+| 13 | `attach-notes` | LIVE `FILE_NOTES_POST` | ledger `file_notes_posted` all `attached` |
+| 14 | `ledger-export` | LIVE `BQ_LOAD` | HubSpot ids visible in silver; StackSync syncs can be enabled |
+| 15 | `deals-dry` | | pass 2, only after `approve=Y` rows exist in `deal_decisions.csv` |
+| 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery) |
+
+**Rules the sequence enforces**
+- A step counts as done only if its last successful run is newer than every step before it. Re-running `walk` makes 3–14 pending again. That is intended.
+- A LIVE step first re-runs its dry counterpart, then fires. In this notebook a LIVE cell is refused until `$ConfirmLive = $true`; with it set, `YES_ALL=1` answers the runner's prompts, so the flag is your confirmation.
+- Anything that stops the run (dbt FAIL, ambiguous company names, `type_mismatch`, a 403) is recorded as `failed` and stays the next step until it passes.
+
+#!mermaid
+
+flowchart LR
+    s1["1 preflight"] --> s2["2 walk"] --> s3["3 bq-init"] --> s4["4 bq-load ⟨LIVE⟩"] --> s5["5 hs-props ⟨LIVE⟩"] --> s6{"6 dbt\n0 FAIL ?"}
+    s6 -- no --> stop((stop))
+    s6 -- yes --> s7["7 hs-props-verify"] --> s8["8 review"] --> s9["9 companies-dry"] --> s10["10 companies-live ⟨LIVE⟩"]
+    s10 --> s11["11 attach-dry"] --> s12["12 attach-upload ⟨LIVE⟩"] --> s13["13 attach-notes ⟨LIVE⟩"] --> s14["14 ledger-export ⟨LIVE⟩"]
+    s14 -. "approve=Y rows" .-> s15["15 deals-dry"] --> s16["16 deals-live ⟨LIVE⟩"] --> s14b["ledger-export again"]
+
+#!markdown
+
+## 0 · Switches + helpers — run first, every time
+
+Same switches as the compass. The helper functions live in `notebooks/mr-load-helpers.ps1`
+(shared by both notebooks); this cell finds and loads them. `$ConfirmLive` stays `$false` until
+you have read a dry output and mean it.
+
+#!pwsh
+
+# ── switches ────────────────────────────────────────────────────────────────
+$Route       = 'wsl'                                   # 'wsl' | 'devcontainer' | 'linux'
+$Distro      = 'Ubuntu-24.04'
+$RepoWsl     = '~/mir-load'                            # route wsl: clone on the Linux side
+$RepoWin     = "$HOME\mir-load"                        # route devcontainer: Windows clone (also where this notebook is looked up)
+$Image       = 'mrload-ubuntu'
+$RepoLinux   = '/workspaces/mir-load'                  # route linux: notebook opened inside Ubuntu / the Dev Container
+$ConfirmLive = $false                                  # $true = LIVE steps fire (BigQuery + HubSpot writes), prompts answered
+
+# ── load notebooks/mr-load-helpers.ps1 ──────────────────────────────────────
+$candidates = @((Join-Path $RepoWin 'notebooks\mr-load-helpers.ps1'),
+                (Join-Path $PWD 'mr-load-helpers.ps1'),
+                (Join-Path $PWD 'notebooks\mr-load-helpers.ps1'),
+                (Join-Path $RepoLinux 'notebooks/mr-load-helpers.ps1'))
+if ($Route -eq 'wsl' -and (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+    $env:WSL_UTF8 = '1'
+    $linuxHome  = (wsl.exe -d $Distro -e bash -lc 'echo $HOME' | Select-Object -First 1).Trim()
+    $candidates += "\\wsl$\$Distro" + ((($RepoWsl -replace '^~', $linuxHome) -replace '/', '\')) + '\notebooks\mr-load-helpers.ps1'
+}
+$helpers = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if (-not $helpers) { throw "mr-load-helpers.ps1 not found. Looked in: $($candidates -join ' | '). Set `$RepoWin to your Windows clone (or open the repo folder in VS Code) and re-run." }
+Invoke-Expression (Get-Content -Raw $helpers)
+"helpers: $helpers"
+Show-Route
+
+#!markdown
+
+## 1 · Where am I?
+
+Reads `.mrload/checkpoints.tsv` and the artefacts. `done` / `stale` / `failed` / `pending` per
+step, evidence (row counts, ledger statuses, dbt test summary), and the **next** step in order.
+Run it whenever you come back; run it after any failure.
+
+#!pwsh
+
+Get-PipelineState
+
+#!markdown
+
+## 2 · The sequence — one cell per step, top to bottom
+
+Each cell is `Invoke-Step '<name>'`, which is `scripts/run_pass1.sh <name>` inside Ubuntu. LIVE
+cells carry the gate inline and are refused until `$ConfirmLive = $true`. Re-running a cell is
+always safe: every step skips what is already done and converges.
+
+### 1 · preflight
+
+#!pwsh
+
+Invoke-Step 'preflight'
+
+#!markdown
+
+### 2 · walk — Drive DFS → `.mrload/library_hierarchy.csv` (re-run this and steps 3–14 become pending again)
+
+#!pwsh
+
+Invoke-Step 'walk'
+
+#!markdown
+
+### 3 · bq-init — datasets + empty ledger tables
+
+#!pwsh
+
+Invoke-Step 'bq-init'
+
+#!markdown
+
+### 4 · bq-load — LIVE `MRLOAD_APPROVE_BQ_LOAD`
+
+#!pwsh
+
+Invoke-Step 'bq-load'
+
+#!markdown
+
+### 5 · hs-props — LIVE `MRLOAD_APPROVE_PROPERTY_CREATE` (definitions only; stops on `type_mismatch`)
+
+#!pwsh
+
+Invoke-Step 'hs-props'
+
+#!markdown
+
+### 6 · dbt — the cardinality gate. **0 FAIL or the sequence stops here.**
+
+#!pwsh
+
+Invoke-Step 'dbt'
+
+#!markdown
+
+### 7 · hs-props-verify — definitions vs built silver → `stacksync_mapping.csv` (your StackSync UI sheet)
+
+#!pwsh
+
+Invoke-Step 'hs-props-verify'
+
+#!markdown
+
+### 8 · review — operator queues; `multi_parent.csv` must be empty before any HubSpot write
+
+#!pwsh
+
+Invoke-Step 'review'
+Invoke-Ubuntu 'wc -l .mrload/review/*.csv'
+
+#!markdown
+
+### 9 · companies-dry — `ambiguous_match` must be 0 (merge or rename in HubSpot, then re-run)
+
+#!pwsh
+
+Invoke-Step 'companies-dry'
+
+#!markdown
+
+### 10 · companies-live — LIVE `MRLOAD_APPROVE_COMPANY_CREATE`
+
+#!pwsh
+
+Invoke-Step 'companies-live'
+
+#!markdown
+
+### 11 · attach-dry
+
+#!pwsh
+
+Invoke-Step 'attach-dry'
+
+#!markdown
+
+### 12 · attach-upload — LIVE `MRLOAD_APPROVE_FILES_UPLOAD` (phase 1, resumable)
+
+#!pwsh
+
+Invoke-Step 'attach-upload'
+
+#!markdown
+
+### 13 · attach-notes — LIVE `MRLOAD_APPROVE_FILE_NOTES_POST` (phase 2, resumable)
+
+#!pwsh
+
+Invoke-Step 'attach-notes'
+
+#!markdown
+
+### 14 · ledger-export — LIVE `MRLOAD_APPROVE_BQ_LOAD`; after it, enable the StackSync syncs
+
+#!pwsh
+
+Invoke-Step 'ledger-export'
+
+#!markdown
+
+### Pass 2 — only after you set `approve=Y` on rows of `.mrload/review/deal_decisions.csv`
+
+#!pwsh
+
+Invoke-Step 'deals-dry'
+
+#!pwsh
+
+Invoke-Step 'deals-live'
+
+#!pwsh
+
+Invoke-Step 'ledger-export'      # deal ids back to BigQuery → silver_library_deal_candidates.hs_deal_id
+
+#!markdown
+
+## 3 · Streamlined patterns
+
+**Next only.** One cell, run it again and again: it looks up the next pending step (stale
+predecessors first) and runs exactly that one.
+
+#!pwsh
+
+Invoke-NextStep
+
+#!markdown
+
+**Everything dry, then decide.** Runs every pending step in order and stops in front of the first
+LIVE gate, whatever `$ConfirmLive` says. Read the dry output, then either `Invoke-Step` the LIVE
+step or run this cell again with `$ConfirmLive = $true` set in the Switches cell.
+
+#!pwsh
+
+Invoke-Sequence -UntilLive
+
+#!markdown
+
+**Through a target.** With `$ConfirmLive = $true` this fires every gate on the way, in order,
+without prompts, and halts at the first failure. Typical: `-Through 'ledger-export'` for the whole
+of pass 1 after a clean `Invoke-Sequence -UntilLive`.
+
+#!pwsh
+
+Invoke-Sequence -Through 'ledger-export'
+
+#!markdown
+
+## 4 · Status and stop rules
+
+| the state cell says | it means | you do |
+|---|---|---|
+| `failed` on `dbt` | a cardinality test failed (multi-parent file, duplicate company name in a segment, tradeshow leak) | fix in Drive → `walk` → the sequence re-enters at `bq-load` |
+| `failed` on `companies-live` | ambiguous names | merge or rename in HubSpot → `companies-dry` |
+| `failed` on `hs-props` | `type_mismatch` or 403 | fix the card or the private-app scopes → `hs-props` |
+| `stale` on 3–14 | `walk` ran again | just continue, the order is preserved |
+| `partial` in the attach ledger | note created, association failed | re-run `attach-notes`, it converges |
+
+#!pwsh
+
+Invoke-Step 'status'
+Invoke-Ubuntu 'scripts/dev/last_log.sh 30'
+
+#!markdown
+
+## 5 · Rollback — LIVE `MRLOAD_APPROVE_UNMIGRATE`
+Deletes every note this pipeline attached (ledger is the index). Files, companies and deals stay.
+
+#!pwsh
+
+Invoke-Step 'unmigrate'

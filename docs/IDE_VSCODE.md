@@ -36,6 +36,13 @@ notebook calls prints masked values only, so the file is safe to keep in git.
 | 8 rehearsals | unit tests, e2e clean, e2e dirty (must stop at the dbt gate) | no |
 | 9 troubleshooting | `last_log.sh`, `dbt_failures.sh`, `status`, `unmigrate` | no |
 
+**Second notebook — `notebooks/mr-load-run.dib`, the run sheet.** Same helpers (shared in
+`notebooks/mr-load-helpers.ps1`), no setup material: the 16 steps in order, one cell each,
+a *where am I* cell (`Get-PipelineState`, from `.mrload/checkpoints.tsv`), `Invoke-NextStep`
+for the next pending step, and `Invoke-Sequence -UntilLive`, which runs every pending DRY
+step in order and stops in front of the first LIVE gate. Use the compass once per machine,
+the run sheet every day.
+
 The same helpers are Tasks (`mr-load: env clinic`, `… auth check`, `… crlf check`,
 `… git guard proof`, `… dbt failures`, `… last log`) for people who prefer the palette.
 

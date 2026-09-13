@@ -1,4 +1,4 @@
-# e2e rehearsal record — 2026-09-13 (32 checks; first recorded 2026-09-07 with 28)
+# e2e rehearsal record — 2026-09-13 (34 checks; first recorded 2026-09-07 with 28)
 
 Produced by `scripts/e2e_rehearsal.sh` in the development container (no Google
 or HubSpot credentials available there, see `docs/RUNBOOK_PASS1.md` →
@@ -6,7 +6,7 @@ Rehearsal). Real code paths against local stand-ins; wall time ≈ 31 s.
 
 ## Clean scenario — full sequence steps 0 → 7 (+ hs-props before dbt, hs-props-verify after)
 
-# mr-load e2e rehearsal — 32/32 checks passed
+# mr-load e2e rehearsal — 34/34 checks passed
 
 Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot client → HubSpot mock · `bq` stub with schema validation · real dbt models + tests on DuckDB · SQLite ledger.
 
@@ -43,7 +43,9 @@ Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot c
 | 29 | pass 2: 4 deals created from approved decisions | PASS | {'created': 4} |
 | 30 | pass 2: deal→company and note→deal associations per deal | PASS |  |
 | 31 | pass 2: hs_deal_id visible in silver_library_deal_candidates | PASS | 4 |
-| 32 | dbt final build after write-back: 34 tests, 0 fail/error | PASS | {'pass': 33, 'warn': 1, 'fail': 0, 'error': 0} |
+| 32 | checkpoints: every step run recorded rc=0, in the executed order | PASS | preflight walk bq-init bq-load hs-props hs-props dbt hs-props-verify review companies-dry companies-live attach-dry attach-upload attach-notes attach-notes ledger-export deals-dry deals-live ledger-export |
+| 33 | pipeline_state: all 16 steps done, next = none (pass 1 + pass 2 complete, deal ids written back) | PASS | next=None pass 1 complete |
+| 34 | dbt final build after write-back: 34 tests, 0 fail/error | PASS | {'pass': 33, 'warn': 1, 'fail': 0, 'error': 0} |
 
 Ledger at the end: companies_resolved created=6 / matched_by_name=1 ·
 files_uploaded uploaded=20 · file_notes_posted attached=20 · deals_created created=4.

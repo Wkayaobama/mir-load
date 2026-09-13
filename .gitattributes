@@ -35,4 +35,5 @@ scripts/e2e/bin/* text eol=lf
 
 # notebooks
 *.dib           text eol=lf
+*.ps1           text eol=lf
 *.ipynb         text eol=lf

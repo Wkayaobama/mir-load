@@ -81,13 +81,16 @@ flowchart TD
 
 ## 0 · Switches and helpers — run this first, every time
 
-Edit the values, then run. `Invoke-Ubuntu '<bash command>'` runs one command line in the
-repo, inside the Ubuntu of the chosen route, with the venv active. `-Live` prepends
+Edit the values, then run. The cell then loads `notebooks/mr-load-helpers.ps1` (shared with
+the run-sheet notebook `mr-load-run.dib`): `Invoke-Ubuntu '<bash command>'` runs one command
+line in the repo, inside the Ubuntu of the chosen route, with the venv active. `-Live` prepends
 `YES_ALL=1` (skips the runner's confirmation prompts) and only works when `$ConfirmLive` is true.
-`-Stdin '<text>'` pipes text into the command (used for secrets).
+`-Stdin '<text>'` pipes text into the command (used for secrets). The helpers also set
+`WSL_UTF8=1`: without it `wsl.exe` writes UTF‑16 when its output is captured, and every line in
+this notebook would come out as `g.a.r.b.l.e.d`.
 
-`$env:WSL_UTF8 = '1'` matters: without it `wsl.exe` writes UTF‑16 when its output is
-captured, and every line in this notebook would come out as `g.a.r.b.l.e.d`.
+Once this machine is set up, switch to **`mr-load-run.dib`** for day-to-day execution: the 16
+steps in order, a *where am I* cell, and `Invoke-NextStep`.
 
 #!pwsh
 
@@ -101,80 +104,20 @@ $RepoLinux   = '/workspaces/mir-load'                  # route linux: repo path 
 $Branch      = 'claude/mr-load-library-system-dphpbj'
 $Repo        = 'https://github.com/Wkayaobama/mir-load.git'
 $ConfirmLive = $false                                  # flip to $true ONLY when you intend BigQuery/HubSpot writes
-$env:WSL_UTF8 = '1'
 
-# ── helpers ─────────────────────────────────────────────────────────────────
-function Invoke-Ubuntu {
-    param(
-        [Parameter(Mandatory, Position = 0)][string]$Command,
-        [switch]$Live,
-        [string]$Stdin
-    )
-    $prefix = ''
-    if ($Live) {
-        if (-not $ConfirmLive) { Write-Warning "LIVE step refused: set `$ConfirmLive = `$true in the Switches cell first. Not run: $Command"; return }
-        $prefix = 'YES_ALL=1 '
-    }
-    $venv = '{ [ -f .venv/bin/activate ] && . .venv/bin/activate; }; '
-    switch ($Route) {
-        'wsl' {
-            $exe  = 'wsl.exe'
-            $nativeArgs = @('-d', $Distro, '-e', 'bash', '-lc', "cd $RepoWsl && $venv$prefix$Command")
-        }
-        'devcontainer' {
-            $exe  = 'docker'
-            $nativeArgs = @('run', '--rm')
-            if ($PSBoundParameters.ContainsKey('Stdin')) { $nativeArgs += '-i' }
-            $nativeArgs += @('-v', "${RepoWin}:/work", '-v', 'mrload-gcloud:/root/.config/gcloud', '-w', '/work',
-                             '-e', 'MRLOAD_VENV=/opt/venv', $Image, 'bash', '-lc', "$prefix$Command")
-        }
-        'linux' {
-            $exe  = 'bash'
-            $nativeArgs = @('-lc', "cd $RepoLinux && $venv$prefix$Command")
-        }
-        default { throw "unknown route '$Route' (wsl | devcontainer | linux)" }
-    }
-    if ($PSBoundParameters.ContainsKey('Stdin')) { $Stdin | & $exe @nativeArgs } else { & $exe @nativeArgs }
-    if ($LASTEXITCODE -ne 0) { Write-Host "✖ exit code $LASTEXITCODE  [$Route]" -ForegroundColor Red }
-    else                     { Write-Host "✔ done  [$Route]" -ForegroundColor Green }
+# ── load the shared helpers (notebooks/mr-load-helpers.ps1: Invoke-Ubuntu, Open-UbuntuTerminal, Set-EnvKey, Invoke-Step, Get-PipelineState …) ──
+$candidates = @((Join-Path $RepoWin 'notebooks\mr-load-helpers.ps1'),
+                (Join-Path $PWD 'mr-load-helpers.ps1'),
+                (Join-Path $PWD 'notebooks\mr-load-helpers.ps1'),
+                (Join-Path $RepoLinux 'notebooks/mr-load-helpers.ps1'))
+if ($Route -eq 'wsl' -and (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+    $linuxHome  = (wsl.exe -d $Distro -e bash -lc 'echo $HOME' | Select-Object -First 1).Trim()
+    $candidates += "\\wsl$\$Distro" + ((($RepoWsl -replace '^~', $linuxHome) -replace '/', '\')) + '\notebooks\mr-load-helpers.ps1'
 }
-
-function Open-UbuntuTerminal {
-    # A real terminal in the route's Ubuntu — for the steps that need a keyboard (sudo password, OAuth code).
-    switch ($Route) {
-        'wsl'          { $cmd = 'wsl.exe'; $cargs = @('-d', $Distro, '--cd', '~') }
-        'devcontainer' { $cmd = 'docker';  $cargs = @('run', '-it', '--rm', '-v', "${RepoWin}:/work", '-v', 'mrload-gcloud:/root/.config/gcloud', '-w', '/work', $Image, 'bash') }
-        default        { Write-Host "route linux: you are already inside Ubuntu — use the VS Code terminal."; return }
-    }
-    if     (Get-Command wezterm -ErrorAction SilentlyContinue) { Start-Process wezterm -ArgumentList (@('start', '--', $cmd) + $cargs) }
-    elseif (Get-Command wt      -ErrorAction SilentlyContinue) { Start-Process wt      -ArgumentList (@($cmd) + $cargs) }
-    else                                                        { Start-Process $cmd    -ArgumentList $cargs }
-    Write-Host "terminal opened: $cmd $($cargs -join ' ')" -ForegroundColor Cyan
-}
-
-function Set-EnvKey {
-    # Masked prompt → value piped into scripts/dev/env_set.sh inside Ubuntu. Nothing is stored in this notebook.
-    param([Parameter(Mandatory)][string]$Key, [switch]$Plain)
-    if ($Plain) { $value = Read-Host "$Key" }
-    else {
-        $sec   = Read-Host -AsSecureString "$Key (hidden)"
-        $value = [System.Net.NetworkCredential]::new('', $sec).Password
-    }
-    if (-not $value) { Write-Warning "empty value — nothing written"; return }
-    Invoke-Ubuntu "scripts/dev/env_set.sh $Key" -Stdin $value
-    Remove-Variable value, sec -ErrorAction SilentlyContinue
-}
-
-function Show-Route {
-    "route        : $Route"
-    switch ($Route) {
-        'wsl'          { "distro       : $Distro`nrepo (linux) : $RepoWsl" }
-        'devcontainer' { "image        : $Image`nrepo (win)   : $RepoWin  → /work" }
-        'linux'        { "repo         : $RepoLinux" }
-    }
-    "branch       : $Branch"
-    "ConfirmLive  : $ConfirmLive   (LIVE cells " + $(if ($ConfirmLive) { 'WILL FIRE' } else { 'are blocked' }) + ")"
-}
+$helpers = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if (-not $helpers) { throw "mr-load-helpers.ps1 not found. Looked in: $($candidates -join ' | '). Set `$RepoWin to your Windows clone (or open the repo folder in VS Code) and re-run." }
+Invoke-Expression (Get-Content -Raw $helpers)
+"helpers: $helpers"
 Show-Route
 
 #!markdown

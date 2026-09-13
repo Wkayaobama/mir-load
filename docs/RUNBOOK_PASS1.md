@@ -362,4 +362,11 @@ functions, and the Drive sharing step — those are what `preflight` checks live
 .mrload/silver_preview.csv      offline 19-col parity          .mrload/cache/          downloaded binaries (disposable)
 .mrload/review/*.csv            your queues + deal decisions   .mrload/logs/           one log per step run
 .mrload/ledger_export/*.csv     step-6 CSVs loaded into BigQuery
+.mrload/checkpoints.tsv         one line per step run (ts, step, rc, message) — read by scripts/dev/pipeline_state.sh
 ```
+
+**Where am I / what is next.** `scripts/dev/pipeline_state.sh` (Task *mr-load: pipeline
+state*, or the run-sheet notebook) lists the 16 steps with `done / stale / failed /
+pending` and names the next one. A step counts as done only if its last successful run
+is newer than every predecessor's: re-running `walk` makes `bq-load` … `ledger-export`
+stale again on purpose, so the sequence is always re-entered at the right place.
