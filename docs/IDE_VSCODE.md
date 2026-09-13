@@ -6,6 +6,39 @@ pipeline step is a Task, every runner sub-command is a Debug configuration you
 can breakpoint, and the artefacts (`.mrload/*.csv`, the SQLite ledger, dbt's
 compiled SQL) open in the editor.
 
+## 0. The compass notebook — `notebooks/mr-load-compass.dib`
+
+One Polyglot Notebook that walks **both** routes (A · WSL, B · Dev Container/Docker) cell by
+cell, with the explanation next to every step, and doubles as the `.env` troubleshooting
+console: masked inspection, masked entry, CRLF/placeholder detection, and a git-safety proof
+that force-stages `.env` and expects the pre-commit guard to refuse the commit. It runs on the
+Windows host (PowerShell kernel, bundled by the extension) and reaches Ubuntu through
+`wsl.exe -d <distro> -e bash -lc …` or `docker run --rm -v <clone>:/work … bash -lc …`;
+opened *inside* the Dev Container it runs with `$Route = 'linux'` (the container now installs
+the .NET SDK feature for that).
+
+Prerequisites on the host: VS Code, the extension `ms-dotnettools.dotnet-interactive-vscode`
+(*Polyglot Notebooks*, in `.vscode/extensions.json`), and the .NET SDK the extension names
+on first open — `winget install Microsoft.DotNet.SDK.9` (or `.SDK.8`; the extension's
+`minimumDotNetSdkVersion` setting tells you which). Some builds show a deprecation-style
+banner; the notebook still runs. Open the `.dib`, run the **Switches** cell (pick `$Route`,
+distro, clone path), then top to bottom. `.dib` files store no outputs, and every script the
+notebook calls prints masked values only, so the file is safe to keep in git.
+
+| section | cells | needs a terminal? |
+|---|---|---|
+| 1 host prerequisites | `wsl -l -v`, docker, dotnet, git | no |
+| A WSL | install distro, clone on the Linux side, `crlf_check.sh`, verify, `code --remote wsl+…` | bootstrap only (sudo password) |
+| B Dev Container | clone, `docker build`, `crlf_check.sh` + guarded LF fix, verify, *Reopen in Container* | no |
+| 4 `.env` clinic | `env_clinic.sh --fix`, `Set-EnvKey` (masked → `env_set.sh`), `env_clinic.sh`, `install_git_hooks.sh`, `guard_proof.sh` | no |
+| 5 Google auth | `gauth.sh`, then `auth_check.sh` | `gauth.sh` only (OAuth code) |
+| 6–7 pipeline | every `run_pass1.sh` step; LIVE steps blocked until `$ConfirmLive = $true` | no |
+| 8 rehearsals | unit tests, e2e clean, e2e dirty (must stop at the dbt gate) | no |
+| 9 troubleshooting | `last_log.sh`, `dbt_failures.sh`, `status`, `unmigrate` | no |
+
+The same helpers are Tasks (`mr-load: env clinic`, `… auth check`, `… crlf check`,
+`… git guard proof`, `… dbt failures`, `… last log`) for people who prefer the palette.
+
 ## 1. Open the local copy inside Ubuntu
 
 **Route A — Dev Container (recommended; Windows, macOS, Linux with Docker Desktop)**
@@ -99,4 +132,13 @@ models locally: `MRLOAD_DBT_TARGET=duckdb` (see `dbt/README.md`).
 .vscode/settings.json             interpreter (.venv for WSL), pytest, LF line endings
 .vscode/extensions.json           recommendations
 tests/fixtures/manifest_sample.json   offline tree for `runner ▸ index`
+notebooks/mr-load-compass.dib     Polyglot Notebook: both routes + .env clinic + every step (section 0)
+scripts/dev/env_clinic.sh         masked .env inspection, placeholders, CRLF, mode, git safety (--fix repairs)
+scripts/dev/env_set.sh            set one .env key from stdin / a silent prompt, LF + mode 600, prints length only
+scripts/dev/install_git_hooks.sh  pre-commit guard: refuses env files and token-shaped content
+scripts/dev/guard_proof.sh        proves the guard (force-stage .env → commit refused → unstaged)
+scripts/dev/auth_check.sh         gcloud account/project, ADC quota project, Drive root GET, bq, HubSpot portal
+scripts/dev/crlf_check.sh         tracked files must be LF; prints the renormalize fix
+scripts/dev/dbt_failures.sh       non-passing dbt nodes + compiled SQL paths from run_results.json
+scripts/dev/last_log.sh           newest .mrload/logs/* and its tail
 ```

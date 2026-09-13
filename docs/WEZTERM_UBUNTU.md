@@ -14,6 +14,11 @@ and the e2e rehearsal, and leaves you at the credentials step.
 | D. GCE runner VM over IAP | your project | long runs, or later scheduling |
 | **IDE** | VS Code Dev Container / WSL, PyCharm | breakpoints, one-click steps, artefact viewers — `docs/IDE_VSCODE.md` |
 
+> **Guided version:** `notebooks/mr-load-compass.dib` (Polyglot Notebook, VS Code) walks the
+> WSL route and the Docker/Dev Container route cell by cell, with the `.env` clinic and every
+> pipeline step — see `docs/IDE_VSCODE.md` §0. Everything below is the same content as plain
+> terminal commands.
+
 ## 0. Wire the WezTerm module (once)
 
 ```bash

@@ -2,6 +2,66 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "mr-load: env clinic (masked .env inspection, git safety)",
+      "type": "shell",
+      "command": "bash scripts/dev/env_clinic.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "add --fix to create .env / strip CRLF / chmod 600"
+    },
+    {
+      "label": "mr-load: env clinic --fix",
+      "type": "shell",
+      "command": "bash scripts/dev/env_clinic.sh --fix",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: auth check (Google ADC + Drive root + BigQuery + HubSpot portal)",
+      "type": "shell",
+      "command": "bash scripts/dev/auth_check.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
+      "label": "mr-load: install git secret guard (pre-commit)",
+      "type": "shell",
+      "command": "bash scripts/dev/install_git_hooks.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ""
+    },
+    {
       "label": "mr-load: gauth (Google login for Drive + BigQuery, verified)",
       "type": "shell",
       "command": "bash scripts/gauth.sh",
@@ -14,7 +74,7 @@
         "panel": "dedicated",
         "clear": true
       },
-      "detail": "gcloud auth login --enable-gdrive-access --update-adc \u2192 quota project \u2192 APIs \u2192 live Drive check"
+      "detail": "gcloud auth login --enable-gdrive-access --update-adc → quota project → APIs → live Drive check"
     },
     {
       "label": "mr-load: bootstrap this machine",
@@ -51,7 +111,7 @@
       }
     },
     {
-      "label": "mr-load: e2e rehearsal (clean, mocks, \u224830 s)",
+      "label": "mr-load: e2e rehearsal (clean, mocks, ≈30 s)",
       "type": "shell",
       "command": "bash scripts/e2e_rehearsal.sh",
       "options": {
@@ -67,7 +127,7 @@
       "group": "test"
     },
     {
-      "label": "mr-load: e2e rehearsal (dirty \u2192 must stop at dbt gate)",
+      "label": "mr-load: e2e rehearsal (dirty → must stop at dbt gate)",
       "type": "shell",
       "command": "SCENARIO=dirty bash scripts/e2e_rehearsal.sh",
       "options": {
@@ -366,6 +426,66 @@
         "clear": true
       },
       "detail": ""
+    },
+    {
+      "label": "mr-load: crlf check (tracked files must be LF)",
+      "type": "shell",
+      "command": "bash scripts/dev/crlf_check.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "prints the one-time renormalize fix if a Windows checkout carries CRLF"
+    },
+    {
+      "label": "mr-load: git guard proof (force-stage .env, commit must be refused)",
+      "type": "shell",
+      "command": "bash scripts/dev/guard_proof.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "expects: ✔ commit refused by the guard (rc=1); leaves the index as it found it"
+    },
+    {
+      "label": "mr-load: dbt failures (non-passing nodes + compiled SQL)",
+      "type": "shell",
+      "command": "bash scripts/dev/dbt_failures.sh",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": "reads dbt/target/run_results.json after a dbt step or the rehearsal"
+    },
+    {
+      "label": "mr-load: last log (tail of the newest step log)",
+      "type": "shell",
+      "command": "bash scripts/dev/last_log.sh 60",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "detail": ".mrload/logs/<step>-<timestamp>.log — the first ✖ line is the cause"
     }
   ]
 }

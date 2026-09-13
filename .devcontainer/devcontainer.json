@@ -4,6 +4,11 @@
     "dockerfile": "../scripts/dev/Dockerfile",
     "context": ".."
   },
+  "features": {
+    "ghcr.io/devcontainers/features/dotnet:2": {
+      "version": "9.0"
+    }
+  },
   "remoteUser": "root",
   "mounts": [
     "source=mrload-gcloud,target=/root/.config/gcloud,type=volume"
@@ -21,13 +26,17 @@
         "mechatroner.rainbow-csv",
         "innoverio.vscode-dbt-power-user",
         "redhat.vscode-yaml",
-        "timonwong.shellcheck"
+        "timonwong.shellcheck",
+        "ms-dotnettools.dotnet-interactive-vscode"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/opt/venv/bin/python",
         "python.terminal.activateEnvironment": false,
         "python.testing.pytestEnabled": true,
-        "python.testing.pytestArgs": ["tests", "--ignore=tests/e2e"],
+        "python.testing.pytestArgs": [
+          "tests",
+          "--ignore=tests/e2e"
+        ],
         "terminal.integrated.defaultProfile.linux": "bash",
         "files.eol": "\n"
       }

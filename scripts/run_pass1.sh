@@ -136,8 +136,13 @@ step_preflight() {
   if [[ -n "${HUBSPOT_SANDBOX_TOKEN:-}" ]]; then
     local info; info=$(curl -sS -H "Authorization: Bearer $HUBSPOT_SANDBOX_TOKEN" "$HS_BASE/account-info/v3/details" || true)
     local pid; pid=$($PY -c "import json,sys;print(json.loads(sys.argv[1]).get('portalId','?'))" "$info" 2>/dev/null || echo "?")
-    [[ "$pid" != "?" ]] && ok "token valid for portal $pid  ← OPERATOR: confirm this is the SANDBOX (not 9201667 prod)" \
-      || die "HubSpot token rejected: $info"
+    [[ "$pid" != "?" ]] || die "HubSpot token rejected: $info"
+    if [[ "$pid" == "9201667" && "${MRLOAD_ALLOW_PROD_PORTAL:-0}" != "1" ]]; then
+      die "token resolves to portal 9201667 (WISeKey SA / ICALPS PRODUCTION). Sandbox first. Set MRLOAD_ALLOW_PROD_PORTAL=1 only when production is the deliberate target."
+    fi
+    [[ -n "${HUBSPOT_SANDBOX_PORTAL_ID:-}" && "$HUBSPOT_SANDBOX_PORTAL_ID" != "00000000" && "$HUBSPOT_SANDBOX_PORTAL_ID" != "$pid" ]] && \
+      die "token resolves to portal $pid but HUBSPOT_SANDBOX_PORTAL_ID=$HUBSPOT_SANDBOX_PORTAL_ID — wrong token or wrong portal id in .env"
+    ok "token valid for portal $pid  ← OPERATOR: confirm this is the SANDBOX"
   fi
 
   say "0/preflight — BigQuery access"
