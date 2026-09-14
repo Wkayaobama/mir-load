@@ -303,23 +303,30 @@ live HubSpot step to keep BigQuery current.
 
 ## 7. `deals-dry` / `deals-live` — pass 2  [gate MRLOAD_APPROVE_DEAL_CREATE]
 
-Your operation first: edit `.mrload/review/deal_decisions.csv` — set
-`approve=Y`, adjust `dealname`, fill `pipeline` and `dealstage` (portal ids;
-or set `MRLOAD_DEAL_PIPELINE` / `MRLOAD_DEAL_STAGE` as defaults) and `amount`.
-Rows left at `N` are never touched. Then:
+**Unit of work: the inferred deal, not the PDF** (side branch `walker-deal-depth3`; the
+inference is documented in `docs/WALKER_DFS_AND_PATTERNS.md` §6). `review` writes:
 
-- `deals-dry`: `would_create` per approved row; `no_company_resolved` means
-  `companies-live` has not run for that company.
-- `deals-live`: `POST /crm/v3/objects/deals` (dealname, dealstage, pipeline,
-  amount) → default association **deal → company** → default association
-  **note → deal** (the pass-1 note of that PDF, so the document hangs off both
-  the company and the deal). Outcome in `ledger.deals_created`; then re-run
-  `ledger-export`.
+- `deal_anchors.csv` — every qualified anchor: level-3 folders with at least one PDF beneath
+  and a name outside the exhibition/tradeshow list, plus PO/Billing PDFs sitting directly
+  under a company (they anchor themselves). Columns: kind, counts of PDFs / PO-Billing / files.
+- `deal_documents.csv` — files beneath a qualified anchor that pass 2 does **not** associate
+  (quotes, SOWs, drawings…). They already carry `legacy_deal_id`; they are the candidates for
+  a later note → deal association through the notes API.
+- `deal_decisions.csv` — **one row per anchor**, `approve=N`, `dealname` prefilled as
+  `<company> - <anchor name>`; fill `pipeline`, `dealstage` (portal ids; or set
+  `MRLOAD_DEAL_PIPELINE` / `MRLOAD_DEAL_STAGE`) and `amount`.
 
-This is deliberately a second pass over the queue, never part of the DFS, and
-parked PDFs only enter it by your edit of the decisions file.
+```bash
+scripts/run_pass1.sh deals-dry     # would_create per approved anchor + how many notes it will attach
+scripts/run_pass1.sh deals-live    # create deal → associate deal → company → associate every PO/Billing note beneath
+scripts/run_pass1.sh ledger-export # hs_deal_id back into silver_library_deal / _deal_candidates / _index
+```
 
----
+Idempotent through `ledger.deals_created`, keyed by the anchor's library id; `hs_note_id`
+there holds the associated note ids, `;`-joined. `partial` = deal created, one association
+failed; re-run converges. To change the heuristic (minimum PDFs, excluded names) edit
+`context/cards/library.yaml` → `deal_inference` and the matching dbt vars, then `dbt` and
+`review` again — no re-walk.
 
 ## Rehearsal — proving the sequence without credentials
 
@@ -363,6 +370,7 @@ functions, and the Drive sharing step — those are what `preflight` checks live
 .mrload/review/*.csv            your queues + deal decisions   .mrload/logs/           one log per step run
 .mrload/ledger_export/*.csv     step-6 CSVs loaded into BigQuery
 .mrload/checkpoints.tsv         one line per step run (ts, step, rc, message) — read by scripts/dev/pipeline_state.sh
+.mrload/review/deal_anchors.csv / deal_documents.csv   inferred deals and their deferred documents (side branch)
 ```
 
 **Where am I / what is next.** `scripts/dev/pipeline_state.sh` (Task *mr-load: pipeline

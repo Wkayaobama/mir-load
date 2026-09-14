@@ -77,6 +77,13 @@ models:
         tests: [not_null]
       - name: node_key
         tests: [not_null, unique]
+      - name: legacy_deal_id
+        description: "Library → Deal N:0..1: NULL for files with no inferred deal; when set it must exist (REJECT)"
+        tests:
+          - relationships:
+              arguments:
+                to: ref('silver_library_deal')
+                field: legacy_deal_id
       - name: asset_class
         tests:
           - not_null
@@ -84,8 +91,88 @@ models:
               arguments:
                 values: ['asset', 'deal_candidate', 'parked_for_review']
 
+  - name: silver_library_deal
+    description: >
+      Inferred deals: qualified level-3 folders (PDF beneath, name outside deal_exclude_regex) plus
+      self-anchored PO/Billing PDFs directly under a company. Deal → Company N:1 (REJECT).
+    constraints:
+      - type: primary_key
+        columns: [legacy_deal_id]
+        warn_unenforced: false
+      - type: foreign_key
+        columns: [legacy_company_id]
+        to: ref('silver_library_company')
+        to_columns: [legacy_company_id]
+        warn_unenforced: false
+    columns:
+      - name: deal_node_key
+        data_type: string
+        constraints: [{type: not_null}]
+        tests: [not_null, unique]
+      - name: legacy_deal_id
+        data_type: string
+        constraints: [{type: not_null}]
+        tests: [not_null, unique]
+      - name: deal_name
+        data_type: string
+        tests: [not_null]
+      - name: anchor_kind
+        data_type: string
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['folder', 'file']
+      - name: company_node_key
+        data_type: string
+        tests: [not_null]
+      - name: legacy_company_id
+        data_type: string
+        description: "Deal → Company N:1 (REJECT on violation)"
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('silver_library_company')
+                field: legacy_company_id
+      - name: company_name
+        data_type: string
+      - name: segment
+        data_type: string
+      - name: depth
+        data_type: int64
+      - name: drive_id
+        data_type: string
+      - name: link
+        data_type: string
+      - name: drive_created_at
+        data_type: timestamp
+      - name: drive_modified_at
+        data_type: timestamp
+      - name: owner_email
+        data_type: string
+      - name: asset_count
+        data_type: int64
+      - name: pdf_count
+        data_type: int64
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+      - name: deal_candidate_count
+        data_type: int64
+      - name: parked_count
+        data_type: int64
+      - name: hs_deal_id
+        data_type: string
+        description: "From ledger deals_created (pass 2 + ledger-export); NULL before"
+      - name: hs_dealname
+        data_type: string
+      - name: deal_status
+        data_type: string
+
   - name: silver_library_deal_candidates
-    description: "Pass-2 queue (PO / Billing PDFs)"
+    description: "Pass-2 queue (PO / Billing PDFs), each carrying its inferred deal (legacy_deal_id)"
     columns:
       - name: legacy_library_id
         tests: [not_null, unique]

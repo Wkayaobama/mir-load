@@ -28,7 +28,7 @@ def test_clean_scenario_all_checks_pass():
     r = _run("clean")
     report = (REPO / ".mrload" / "rehearsal" / "REPORT.md").read_text()
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-1000:]
-    assert "FAIL" not in report and "34/34 checks passed" in report
+    assert "FAIL" not in report and "41/41 checks passed" in report
 
 
 def test_dirty_scenario_is_stopped_by_the_dbt_gate():

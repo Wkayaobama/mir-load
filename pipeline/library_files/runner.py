@@ -31,6 +31,7 @@ from pathlib import Path
 
 from .card import DEFAULT_CARD_PATH, load_library_card
 from .companies import company_folders_from_hierarchy, resolve_companies
+from .deal_anchors import deal_documents, qualify_deal_anchors
 from .deals import read_decisions, resolve_deals, write_decisions_template
 from .config import Settings
 from .drive_walker import ApiDriveLister, DriveFile, dfs_entries
@@ -292,7 +293,20 @@ def cmd_review_export(args: argparse.Namespace) -> int:
             w.writeheader()
             w.writerows(subset)
         summary[name] = len(subset)
-    summary["deal_decisions.csv"] = write_decisions_template(rows, out_dir / "deal_decisions.csv")
+    card = load_library_card(Path(args.card)) if getattr(args, "card", None) else load_library_card()
+    anchors = qualify_deal_anchors(rows, card)
+    deferred = deal_documents(rows, anchors)
+    anchor_cols = ["deal_node_key", "legacy_deal_id", "deal_name", "anchor_kind", "company_node_key",
+                   "pdf_count", "deal_candidate_count", "asset_count", "link"]
+    with (out_dir / "deal_anchors.csv").open("w", encoding="utf-8", newline="") as fp:
+        w = csv.DictWriter(fp, fieldnames=anchor_cols); w.writeheader()
+        for a in sorted(anchors.values(), key=lambda a: (a.company_node_key, a.anchor_kind, a.deal_name)):
+            w.writerow({k: getattr(a, k) for k in anchor_cols})
+    with (out_dir / "deal_documents.csv").open("w", encoding="utf-8", newline="") as fp:
+        w = csv.DictWriter(fp, fieldnames=cols + ["legacy_deal_id", "deal_name"]); w.writeheader(); w.writerows(deferred)
+    summary["deal_anchors.csv"] = len(anchors)
+    summary["deal_documents.csv"] = len(deferred)
+    summary["deal_decisions.csv"] = write_decisions_template(rows, out_dir / "deal_decisions.csv", card=card)
     json.dump(summary, sys.stdout, indent=2)
     print()
     return 0
@@ -363,9 +377,11 @@ def cmd_deals(args: argparse.Namespace) -> int:
         print("decisions file is empty", file=sys.stderr)
         return 1
     ledger = _ledger(settings, args.ledger)
+    card = load_library_card(Path(args.card)) if args.card else load_library_card()
+    assoc = tuple(((card.raw.get("deal_inference") or {}).get("pass_2_associates")) or ["deal_candidate"])
     results = resolve_deals(
-        decisions, client=_client_or_none(settings), ledger=ledger,
-        live_create=_gate(APPROVE_DEAL_CREATE_ENV),
+        decisions, hierarchy_rows=read_hierarchy_csv(Path(args.hierarchy)), client=_client_or_none(settings),
+        ledger=ledger, live_create=_gate(APPROVE_DEAL_CREATE_ENV), associate_classes=assoc,
     )
     json.dump(results, sys.stdout, indent=2)
     print()
@@ -416,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
     rev = sub.add_parser("review-export", help="Operator queues + deal_decisions.csv template (offline).")
     rev.add_argument("--hierarchy", required=True)
     rev.add_argument("--out-dir", default=".mrload/review")
+    rev.add_argument("--card", default=None)
     rev.set_defaults(func=cmd_review_export)
 
     props = sub.add_parser("properties", help="HubSpot property definitions for StackSync: ensure (gated) / verify + mapping sheet.")
@@ -433,6 +450,8 @@ def main(argv: list[str] | None = None) -> int:
 
     dl = sub.add_parser("deals", help="Pass 2: deals from the approved decisions file (gated).")
     dl.add_argument("--decisions", required=True, help="edited .mrload/review/deal_decisions.csv")
+    dl.add_argument("--hierarchy", required=True, help="library_hierarchy.csv (which PO/Billing notes belong to each anchor)")
+    dl.add_argument("--card", default=None)
     dl.add_argument("--ledger")
     dl.add_argument("--pipeline", help="default pipeline id (or MRLOAD_DEAL_PIPELINE)")
     dl.add_argument("--dealstage", help="default dealstage id (or MRLOAD_DEAL_STAGE)")

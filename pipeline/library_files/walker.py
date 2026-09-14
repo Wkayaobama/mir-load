@@ -84,6 +84,8 @@ class IndexNode:
     inferred_deal_name: Optional[str] = None
     inferred_year: Optional[str] = None
     company_node_key: Optional[str] = None   # the N:1 anchor edge (Library → Company)
+    deal_node_key: Optional[str] = None      # the N:0..1 anchor CANDIDATE (level 3 = first folder under the company);
+                                             # qualified in silver (PDF beneath, name outside the deal exclusion list)
     asset_class: Optional[str] = None        # files only
     parent_rel_path: str = ""
     path_code: str = ""
@@ -96,6 +98,7 @@ class _Inference:
     company_key: Optional[str] = None
     deal: Optional[str] = None
     year: Optional[str] = None
+    deal_key: Optional[str] = None   # level-3 folder key, inherited by everything beneath it
 
 
 class DriveTreeWalker:
@@ -130,11 +133,16 @@ class DriveTreeWalker:
     # -- classification -------------------------------------------------------
 
     def _classify_folder(
-        self, name: str, depth: int, parent: _Inference, key: str
+        self, name: str, depth: int, parent: _Inference, key: str, parent_key: Optional[str] = None
     ) -> tuple[str, _Inference]:
         inf = _Inference(
-            parent.segment, parent.company, parent.company_key, parent.deal, parent.year
+            parent.segment, parent.company, parent.company_key, parent.deal, parent.year, parent.deal_key
         )
+        # Deal layer (structural only): the first folder level under the company folder is the
+        # deal-anchor candidate; deeper folders and files inherit it. The parent IS the company
+        # anchor iff the parent's inherited company_key is the parent's own node key.
+        if parent_key is not None and parent.company_key is not None and parent.company_key == parent_key:
+            inf.deal_key = key
         year_m = _YEAR_RX.match(name.strip())
         if year_m:
             inf.deal = name.strip()
@@ -187,7 +195,7 @@ class DriveTreeWalker:
 
             asset_class: Optional[str] = None
             if entry.is_dir:
-                category, inf = self._classify_folder(entry.name, depth, parent_inf, key)
+                category, inf = self._classify_folder(entry.name, depth, parent_inf, key, parent_key)
                 self._inherit[entry.path] = inf
             else:
                 if ("." + entry.extension) in self._excl:
@@ -207,6 +215,7 @@ class DriveTreeWalker:
                 inferred_deal_name=inf.deal,
                 inferred_year=inf.year,
                 company_node_key=inf.company_key if category != CAT_SEGMENT else None,
+                deal_node_key=inf.deal_key,
                 asset_class=asset_class,
                 parent_rel_path=rel_parent,
                 path_code=path_code(legacy_parent_segments),

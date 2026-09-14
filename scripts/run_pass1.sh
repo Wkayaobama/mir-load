@@ -265,7 +265,9 @@ step_review() {
   echo "     parked_for_review.csv  → other PDFs awaiting your review"
   echo "     orphans.csv            → files without a company folder (never attached)"
   echo "     multi_parent.csv       → files linked into 2+ folders (must be 0 before going live)"
-  echo "     deal_decisions.csv     → edit approve=Y, dealname, pipeline, dealstage, amount for pass 2"
+  echo "     deal_anchors.csv       → inferred deals: qualified level-3 folders (PDF beneath, not exhibition-shaped) + self-anchored PO/Billing PDFs"
+  echo "     deal_documents.csv     → files beneath an inferred deal that pass 2 does NOT associate yet (notes API later)"
+  echo "     deal_decisions.csv     → ONE ROW PER INFERRED DEAL: edit approve=Y, dealname, pipeline, dealstage, amount for pass 2"
 }
 
 step_companies_dry() {
@@ -331,9 +333,9 @@ step_ledger_export() {
 }
 
 step_deals_dry() {
-  say "7/deals-dry — pass 2 from $REVIEW/deal_decisions.csv (approve=Y rows only)"
+  say "7/deals-dry — pass 2 from $REVIEW/deal_decisions.csv (approve=Y rows only; one deal per inferred anchor)"
   [[ -f "$REVIEW/deal_decisions.csv" ]] || die "run 'review' and edit deal_decisions.csv first"
-  logrun deals-dry $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --ledger "$LEDGER" >"$STATE/deals_dry.json" || true
+  logrun deals-dry $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --hierarchy "$HIER" --ledger "$LEDGER" >"$STATE/deals_dry.json" || true
   $PY -c "import json,collections;d=json.load(open('$STATE/deals_dry.json'));print(dict(collections.Counter(r['status'] for r in d)))"
   echo "   OPERATOR: would_create = approved rows with dealname+dealstage; no_company_resolved = run companies-live first;"
   echo "   set MRLOAD_DEAL_PIPELINE / MRLOAD_DEAL_STAGE (portal ids) or fill them per row."
@@ -343,7 +345,7 @@ step_deals_live() {
   run_step deals-dry; CURRENT_STEP=deals-live   # the dry counterpart is a real run: checkpoint it, then own the failure again
   local n; n=$(count_json "$STATE/deals_dry.json" "sum(1 for r in d if r['status']=='would_create')")
   confirm "Create $n deals, associate deal → company and note → deal?"
-  MRLOAD_APPROVE_DEAL_CREATE=1 logrun deals-live $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --ledger "$LEDGER" >"$STATE/deals_live.json" || true
+  MRLOAD_APPROVE_DEAL_CREATE=1 logrun deals-live $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --hierarchy "$HIER" --ledger "$LEDGER" >"$STATE/deals_live.json" || true
   ledger_sql "select status, count(*) from deals_created group by status"
   echo "   Then re-run: scripts/run_pass1.sh ledger-export   (hs_deal_id → silver_library_deal_candidates)"
 }

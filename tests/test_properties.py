@@ -121,12 +121,12 @@ def test_ensure_live_creates_missing_skips_existing_flags_mismatch_and_is_idempo
 
 
 def test_ensure_reports_failed_create_with_error_and_continues(plan):
-    hs = FakeHubSpot(fail_create_for={"mrload_node_key"})
+    hs = FakeHubSpot(fail_create_for={"mrload_legacy_company_id"})
     res = ensure_properties(hs, plan, live=True)
     failed = [r for r in res if r["status"] == "failed"]
-    assert {r["name"] for r in failed} == {"mrload_node_key"} and len(failed) == 2      # notes + deals
+    assert {r["name"] for r in failed} == {"mrload_legacy_company_id"} and len(failed) == 3   # companies + notes + deals
     assert all("403" in r["error"] and "scopes" in r["error"] for r in failed)
-    assert len(hs.created) == len(plan.fields) - 2
+    assert len(hs.created) == len(plan.fields) - 3
 
 
 def test_property_definition_body(plan):

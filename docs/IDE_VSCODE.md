@@ -130,6 +130,9 @@ problems without touching BigQuery; the failing test's SQL is in
 `dbt/target/compiled/.../tests/`. The DuckDB rehearsal target runs the same
 models locally: `MRLOAD_DBT_TARGET=duckdb` (see `dbt/README.md`).
 
+Walker traversal, classification grammar, every exclusion pattern and the deal layer:
+`docs/WALKER_DFS_AND_PATTERNS.md`.
+
 ## 5. Files added for the IDE
 
 ```

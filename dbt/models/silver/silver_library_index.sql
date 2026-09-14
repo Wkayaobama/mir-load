@@ -2,6 +2,7 @@
 -- anchored to a company folder. legacy_company_id = legacy id of the
 -- anchoring company folder row (Library → Company N:1). Files without an
 -- anchor are routed to silver_library_orphans (WARN), never here (REJECT).
+-- legacy_deal_id (Library → Deal N:0..1) comes from silver_library_deal; NULL when no inferred deal.
 with h as (
     select * from {{ ref('stg_library_hierarchy') }}
 ),
@@ -16,12 +17,17 @@ uploaded as (
 posted as (
     select legacy_library_id, hs_note_id, status as attach_status
     from {{ source('mrload_ledger', 'file_notes_posted') }}
+),
+deals as (
+    -- inferred deal of a file: the qualified level-3 folder above it, or the PO/Billing PDF itself
+    select deal_node_key, legacy_deal_id, deal_name, anchor_kind
+    from {{ ref('silver_library_deal') }}
 )
 select
     h.legacy_library_id,
     c.legacy_company_id,
     cast(null as {{ dbt.type_string() }}) as legacy_contact_id,
-    cast(null as {{ dbt.type_string() }}) as legacy_deal_id,
+    dl.legacy_deal_id,
     cast(null as {{ dbt.type_string() }}) as legacy_case_id,
     h.legacy_file_path,
     h.node_name                 as legacy_file_name,
@@ -42,6 +48,9 @@ select
     h.parent_key,
     h.company_node_key,
     c.company_name,
+    h.deal_node_key,
+    dl.deal_name,
+    dl.anchor_kind as deal_anchor_kind,
     h.asset_class,
     h.inferred_segment,
     h.path_code,
@@ -62,5 +71,7 @@ from h
 join companies c using (company_node_key)
 left join uploaded u on u.legacy_library_id = h.legacy_library_id
 left join posted   n on n.legacy_library_id = h.legacy_library_id
+left join deals    dl on dl.deal_node_key = coalesce(h.deal_node_key,
+                                                     case when h.asset_class = 'deal_candidate' then h.node_key end)
 where not h.is_dir
   and h.asset_class != 'shortcut'

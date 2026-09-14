@@ -34,6 +34,8 @@ levels:
     role: segment             # e.g. Quantum
   - depth: 2
     role: company             # folder name = company name (e.g. Toshiba)
+  - depth: 3
+    role: deal_anchor_candidate   # the FIRST folder level under a company folder (see deal_inference)
   - depth: ">=3"
     role: asset               # every file under the company folder is a library asset
 
@@ -52,6 +54,39 @@ cardinality:
     type: "N:1"
     description: "Drive is a DAG; multi-parent nodes (parents_count > 1) violate the tree assumption"
     violation_policy: REJECT
+  - relation: "Company → Deal"
+    type: "1:N"
+    description: "A company folder holds zero or more inferred deals (qualified level-3 folders, plus PO/Billing PDFs sitting directly under the company)"
+  - relation: "Deal → Company"
+    type: "N:1"
+    description: "Every inferred deal anchors to exactly one company (silver_library_deal.legacy_company_id)"
+    violation_policy: REJECT
+  - relation: "Library → Deal"
+    type: "N:0..1"
+    description: "A file beneath a qualified level-3 folder carries that deal (legacy_deal_id); files directly under the company carry none, except PO/Billing PDFs which anchor themselves"
+    violation_policy: REJECT      # when set, legacy_deal_id must exist in silver_library_deal
+
+# ── Deal inference (side branch walker-deal-depth3) ─────────────────────────
+# Structural part (walker): deal_node_key = the level-3 folder (first folder under the company),
+# inherited by everything beneath it. Nothing else can be an anchor. Companies are untouched.
+# Heuristic part (silver_library_deal, iterated here without re-walking): a candidate qualifies
+# when its subtree holds at least `min_pdf_in_subtree` PDF (a quote exists) AND its name is not
+# exhibition/tradeshow-shaped. Contestable by design: result first, refine later.
+# Other documents beneath a qualified anchor carry legacy_deal_id but are NOT associated to the
+# deal in pass 2 (only PO/Billing PDFs are); they are candidates for the notes API later.
+deal_inference:
+  anchor_level: 3
+  qualify:
+    min_pdf_in_subtree: 1
+  exclude_name_patterns:          # applied case-insensitively; mirrored by dbt var deal_exclude_regex
+    - tradeshow
+    - trade show
+    - exhibition
+    - exibition
+    - expo
+    - events
+  self_anchor_classes: [deal_candidate]   # PO/Billing PDFs directly under the company anchor themselves
+  pass_2_associates: [deal_candidate]     # note → deal only for these; other documents deferred
 
 asset_classification:
   # First match wins. Applied to files only. Pass 1 attaches ALL classes as
@@ -136,17 +171,22 @@ hubspot:
           - { name: mrload_drive_size,          column: drive_size,           type: number,   label: "Drive size (bytes)" }
           - { name: mrload_drive_modified_at,   column: libr_updated_at,      type: datetime, label: "Drive file modified at" }
           - { name: mrload_hs_file_id,          column: hs_file_id,           type: string,   label: "HubSpot file id (phase 1 upload)" }
+          - { name: mrload_legacy_deal_id,      column: legacy_deal_id,       type: string,   label: "Legacy deal id",                 description: "Deal anchor of the file (NULL when none); the later note → deal association key" }
       deals:
-        source_table: silver_library_deal_candidates
+        source_table: silver_library_deal
         match: { column: hs_deal_id, hubspot: hs_object_id }
         fields:
-          - { name: mrload_legacy_library_id,   column: legacy_library_id,    type: string,   label: "Legacy library id" }
+          - { name: mrload_legacy_deal_id,      column: legacy_deal_id,       type: string,   label: "Legacy deal id",                 description: "Library id of the deal anchor (level-3 folder, or the PO/Billing PDF itself)" }
+          - { name: mrload_deal_node_key,       column: deal_node_key,        type: string,   label: "Library deal node key" }
+          - { name: mrload_anchor_kind,         column: anchor_kind,          type: string,   label: "Deal anchor kind",               description: "folder | file" }
           - { name: mrload_legacy_company_id,   column: legacy_company_id,    type: string,   label: "Legacy company id" }
-          - { name: mrload_node_key,            column: node_key,             type: string,   label: "Library node key" }
-          - { name: mrload_file_path,           column: legacy_file_path,     type: string,   label: "Library file path" }
-          - { name: mrload_asset_class,         column: asset_class,          type: string,   label: "Library asset class" }
-          - { name: mrload_drive_file_id,       column: drive_file_id,        type: string,   label: "Drive file id" }
-          - { name: mrload_drive_link,          column: legacy_file_link,     type: string,   label: "Drive file link" }
+          - { name: mrload_segment,             column: segment,              type: string,   label: "Library segment" }
+          - { name: mrload_drive_folder_id,     column: drive_id,             type: string,   label: "Drive id of the anchor" }
+          - { name: mrload_drive_link,          column: link,                 type: string,   label: "Drive link of the anchor" }
+          - { name: mrload_pdf_count,           column: pdf_count,            type: number,   label: "PDFs beneath the anchor" }
+          - { name: mrload_deal_candidate_count, column: deal_candidate_count, type: number,  label: "PO/Billing PDFs beneath the anchor" }
+          - { name: mrload_asset_count,         column: asset_count,          type: number,   label: "Files beneath the anchor" }
+          - { name: mrload_drive_modified_at,   column: drive_modified_at,    type: datetime, label: "Anchor modified at" }
 
 silver_validation:
   stop_checks:
@@ -165,6 +205,6 @@ pipeline_status:
     - "Share scope root with the service account (silent-failure step)"
     - "Company create + upload + note gates default DRY"
   deferred:
-    - "Pass 2: deal indexing of deal_candidate PDFs"
+    - "Pass 2 (this branch): deals keyed on the inferred anchor; non-PO/Billing documents beneath an anchor await note → deal association"
     - "Tradeshows (70) indexing"
   runner_entity_arg: library

@@ -47,6 +47,12 @@ Folder at depth *d*, first match wins:
 4. no company inherited yet → **company_folder** — sets `company_node_key`
 5. otherwise → **document** folder
 
+Then, independently of the category (side branch `walker-deal-depth3`): a folder whose
+parent **is** the company anchor (level 3) gets `deal_node_key` = itself; deeper nodes
+inherit it. That key is only the structural candidate; qualification (≥1 PDF beneath, name
+outside `deal_inference.exclude_name_patterns`) happens in `silver_library_deal`. Full
+account: `docs/WALKER_DFS_AND_PATTERNS.md`.
+
 Files are **document** leaves inheriting `company_node_key`, plus an
 `asset_class` from the card (first match wins):
 
@@ -67,6 +73,9 @@ All non-shortcut classes are attached as notes on the company in pass 1.
 | Company → Library | 1:N | — | `company_node_key` edge |
 | Library → Company | N:1 | REJECT | `silver_library_index.legacy_company_id` not_null + relationships; orphans → `silver_library_orphans` (WARN) |
 | Drive node → parent | N:1 (tree) | REJECT | `parents_count = 1` + `assert_no_multi_parent_nodes` (Drive is a DAG; the API `parents` array exposes it, rclone manifests cannot) |
+| Company → Deal | 1:N | — | `silver_library_deal.company_node_key` |
+| Deal → Company | N:1 | REJECT | `silver_library_deal.legacy_company_id` not_null + relationships |
+| Library → Deal | N:0..1 | REJECT when set | `silver_library_index.legacy_deal_id` relationships → `silver_library_deal`; `assert_deal_anchors_are_level_3`, `assert_deal_anchor_names_not_excluded` |
 | node_key uniqueness | PK | STOP | `unique` test (duplicate sibling names are counted by the walker too) |
 | parent_key → node_key | FK | STOP | `relationships` test |
 
@@ -88,7 +97,8 @@ mirx_owner_email  mirx_owner_fullname  loaded_at
 ```
 
 `legacy_company_id` = `legacy_library_id` of the anchoring **company folder**
-row (the N:1 edge). The HubSpot company id lives in the runner ledger
+row (the N:1 edge). `legacy_deal_id` = `legacy_library_id` of the file's **inferred deal
+anchor** (a qualified level-3 folder, or a PO/Billing PDF itself), NULL when there is none. The HubSpot company id lives in the runner ledger
 (`companies_resolved`) and is joined at attach time. Trailing columns carry
 `node_key`, `parent_key`, `company_node_key`, `asset_class`, inference and
 Drive metadata.
@@ -102,11 +112,11 @@ bq-load        hierarchy → mrload_raw.library_hierarchy                       
 hs-props       HubSpot property DEFINITIONS from the card (StackSync targets; values never written here) [MRLOAD_APPROVE_PROPERTY_CREATE]
 dbt run/test   silver_library_company / _index / _deal_candidates / _parked / _orphans + cardinality tests (+ docs generate → catalog)
 hs-props-verify definitions vs built silver (catalog) → review/stacksync_mapping.csv (the sheet you map in the StackSync UI)
-review-export  operator queues + deal_decisions.csv template (offline)
+review-export  operator queues + deal_anchors.csv / deal_documents.csv + deal_decisions.csv (one row per inferred deal)
 companies      company folder → HubSpot company (search by name, create)     [MRLOAD_APPROVE_COMPANY_CREATE]
 attach         download on demand → POST files → note → associate to company [MRLOAD_APPROVE_FILES_UPLOAD, MRLOAD_APPROVE_FILE_NOTES_POST]
 ledger-export  ledger → mrload_raw.{companies_resolved,files_uploaded,file_notes_posted,deals_created} → dbt build
-deals          pass 2: approved decisions → deal → company, note → deal      [MRLOAD_APPROVE_DEAL_CREATE]
+deals          pass 2: one deal per approved ANCHOR → company; every PO/Billing note beneath → deal  [MRLOAD_APPROVE_DEAL_CREATE]
 unmigrate      delete attached notes from the ledger                          [MRLOAD_APPROVE_UNMIGRATE]
 ```
 

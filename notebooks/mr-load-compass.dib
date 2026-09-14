@@ -582,7 +582,8 @@ Writes `.mrload/review/`: `companies.csv` (the company objects that will be sear
 created — names are folder names), `deal_candidates.csv` (PO / Billing PDFs, pass 2),
 `parked_for_review.csv` (other PDFs), `orphans.csv` (files with no company folder, never
 attached), `multi_parent.csv` (files linked into two or more folders — must be empty before
-going live) and the `deal_decisions.csv` template you edit before pass 2.
+going live), `deal_anchors.csv` / `deal_documents.csv` (the inferred deals and their deferred documents) and the
+`deal_decisions.csv` template, one row per inferred deal, you edit before pass 2.
 
 #!pwsh
 
@@ -646,8 +647,8 @@ Invoke-Ubuntu 'scripts/run_pass1.sh status'
 ---
 # 7 · Pass 2 — deals from PO / Billing PDFs (only after you edited the decisions file)
 
-Edit `.mrload/review/deal_decisions.csv` (VS Code, Rainbow CSV): keep/skip per candidate,
-amounts, pipeline/stage overrides. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
+Edit `.mrload/review/deal_decisions.csv` (VS Code, Rainbow CSV): one row per inferred deal (level-3 folder with a PDF
+beneath, or a PO/Billing PDF directly under the company); approve per row, amounts, pipeline/stage overrides. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
 
 #!pwsh
 

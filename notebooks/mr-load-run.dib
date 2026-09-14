@@ -28,7 +28,7 @@ that is valid. Every step is idempotent (`scripts/run_pass1.sh`), records a chec
 | 12 | `attach-upload` | LIVE `FILES_UPLOAD` | ledger `files_uploaded` all `uploaded` |
 | 13 | `attach-notes` | LIVE `FILE_NOTES_POST` | ledger `file_notes_posted` all `attached` |
 | 14 | `ledger-export` | LIVE `BQ_LOAD` | HubSpot ids visible in silver; StackSync syncs can be enabled |
-| 15 | `deals-dry` | | pass 2, only after `approve=Y` rows exist in `deal_decisions.csv` |
+| 15 | `deals-dry` | | pass 2, one row per inferred deal (anchor) in `deal_decisions.csv`, only `approve=Y` rows |
 | 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery) |
 
 **Rules the sequence enforces**
@@ -214,6 +214,9 @@ Invoke-Step 'ledger-export'
 #!markdown
 
 ### Pass 2 — only after you set `approve=Y` on rows of `.mrload/review/deal_decisions.csv`
+One row per **inferred deal**: a level-3 folder with a PDF beneath (outside the exhibition list), or a PO/Billing PDF
+directly under the company. `deals-live` creates the deal and associates every PO/Billing note beneath it; other
+documents are listed in `deal_documents.csv` for a later association. Reference: `docs/WALKER_DFS_AND_PATTERNS.md`.
 
 #!pwsh
 

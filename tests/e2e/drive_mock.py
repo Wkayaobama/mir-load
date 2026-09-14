@@ -93,13 +93,24 @@ def build_tree(scenario: str) -> Tree:
     t.add("link to LN4 spec", [th], SHORTCUT, shortcut_target="elsewhere")
 
     to = companies["Toshiba"]
-    t.add("Toshiba PO 2026-001.pdf", [to])                       # deal_candidate
+    t.add("Toshiba PO 2026-001.pdf", [to])                       # deal_candidate, directly under the company → self-anchored deal
+    # ── deal layer fixtures (level 3 = first folder under the company) ──
+    rfq = t.add("2026 Quantum sensor RFQ", [to], FOLDER)         # qualifies: PDFs beneath, name not excluded → ONE deal
+    t.add("Quote QS-17.pdf", [rfq])                              # parked (quote) — carries the deal, deferred association
+    t.add("PO 2026-042.pdf", [rfq])                              # deal_candidate → note associated to the deal
+    t.add("SOW.docx", [rfq], "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    draw = t.add("drawings", [rfq], FOLDER)                      # level 4: inherits the anchor
+    t.add("layout.gds", [draw], "application/octet-stream")
     t.add("spec sheet.pdf", [to])                                # parked
     t.add("pricing.xlsx", [to], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     t.add("Roadmap", [to], GSLIDES)                              # export → pptx
     t.add("logo.png", [to], "image/png")
 
     t.add("cryostat quote.pdf", [companies["Bluefors"]])
+    survey = t.add("Site survey", [companies["Bluefors"]], FOLDER)   # level 3 but NO pdf beneath → not a deal
+    t.add("site photos.docx", [survey], "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    expo = t.add("2025 Photonics West Exhibition", [companies["Alice & Bob"]], FOLDER)   # excluded realm → never a deal
+    t.add("booth quote.pdf", [expo])
     t.add("Bluefors framework agreement.docx", [companies["Bluefors"]],
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     t.add("IQM Billing Q2.PDF", [companies["IQM"]])              # deal_candidate (case-insensitive ext)

@@ -57,6 +57,8 @@ class LibraryCard:
     asset_rules: list[AssetRule] = field(default_factory=list)
     gates: dict[str, str] = field(default_factory=dict)
     company_create_gate: str = "MRLOAD_APPROVE_COMPANY_CREATE"
+    deal_exclude_patterns: list[re.Pattern] = field(default_factory=list)   # deal_inference.exclude_name_patterns, (?i)
+    deal_min_pdf: int = 1                                                   # deal_inference.qualify.min_pdf_in_subtree
     raw: dict = field(default_factory=dict)
 
     # -- scope ---------------------------------------------------------------
@@ -75,6 +77,16 @@ class LibraryCard:
             if rule.matches(name=name, extension=ext, mime=mime):
                 return rule.cls
         return "asset"
+
+    # -- deal inference (level 3 + qualifying documents) -----------------------
+
+    def is_deal_excluded_name(self, name: str) -> bool:
+        """True when a level-3 folder name belongs to the exhibition/tradeshow realm (never a deal)."""
+        return any(rx.search(name) for rx in self.deal_exclude_patterns)
+
+    def deal_exclude_regex(self) -> str:
+        """The single case-insensitive regex the dbt var deal_exclude_regex must equal."""
+        return "(?i)(" + "|".join(rx.pattern for rx in self.deal_exclude_patterns) + ")" if self.deal_exclude_patterns else "(?!)"
 
     def root(self, name_or_id: str) -> Optional[ScopeRoot]:
         for r in self.roots:
@@ -112,6 +124,7 @@ def load_library_card(path: Path | None = None) -> LibraryCard:
         for r in scope.get("roots", [])
     ]
     hub = data.get("hubspot", {})
+    deal = data.get("deal_inference", {}) or {}
     return LibraryCard(
         entity=str(data.get("entity", "Library")),
         roots=roots,
@@ -121,5 +134,7 @@ def load_library_card(path: Path | None = None) -> LibraryCard:
         company_create_gate=str(
             hub.get("company_resolution", {}).get("create_gate", "MRLOAD_APPROVE_COMPANY_CREATE")
         ),
+        deal_exclude_patterns=[re.compile(str(x), re.IGNORECASE) for x in deal.get("exclude_name_patterns", [])],
+        deal_min_pdf=int((deal.get("qualify") or {}).get("min_pdf_in_subtree", 1)),
         raw=data,
     )
