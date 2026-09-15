@@ -56,9 +56,9 @@ models:
         columns: [legacy_library_id]
         warn_unenforced: false
       - type: foreign_key
-        columns: [legacy_company_id]
-        to: ref('silver_library_company')
-        to_columns: [legacy_company_id]
+        columns: [company_node_key]            # BigQuery: a FK must reference the declared PRIMARY KEY of the target
+        to: ref('silver_library_company')      # (company_node_key); the N:1 on legacy_company_id is the relationships test
+        to_columns: [company_node_key]
         warn_unenforced: false
     columns:
       - name: legacy_library_id
@@ -100,9 +100,9 @@ models:
         columns: [legacy_deal_id]
         warn_unenforced: false
       - type: foreign_key
-        columns: [legacy_company_id]
-        to: ref('silver_library_company')
-        to_columns: [legacy_company_id]
+        columns: [company_node_key]            # BigQuery: a FK must reference the declared PRIMARY KEY of the target
+        to: ref('silver_library_company')      # (company_node_key); the N:1 on legacy_company_id is the relationships test
+        to_columns: [company_node_key]
         warn_unenforced: false
     columns:
       - name: deal_node_key
