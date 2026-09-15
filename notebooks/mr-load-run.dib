@@ -31,6 +31,13 @@ that is valid. Every step is idempotent (`scripts/run_pass1.sh`), records a chec
 | 15 | `deals-dry` | | pass 2, one row per inferred deal (anchor) in `deal_decisions.csv`, only `approve=Y` rows |
 | 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery) |
 
+**Two surfaces, one rule.** This notebook and a Cloud Shell (or any terminal) run the same
+`scripts/run_pass1.sh`, so a step yields the same result on either. What is local to a clone is
+`.mrload/`: the SQLite ledger, checkpoints and logs. `attach-upload`, `attach-notes` and `deals-live`
+are idempotent only through that ledger, so run the live HubSpot steps from one surface, or copy
+`.mrload/ledger.sqlite` across before continuing on the other. Everything else (walk, bq-load, dbt,
+review, the dry steps, `hs-props`, `companies-live`) is safe to repeat from either side.
+
 **Rules the sequence enforces**
 - A step counts as done only if its last successful run is newer than every step before it. Re-running `walk` makes 3–14 pending again. That is intended.
 - A LIVE step first re-runs its dry counterpart, then fires. In this notebook a LIVE cell is refused until `$ConfirmLive = $true`; with it set, `YES_ALL=1` answers the runner's prompts, so the flag is your confirmation.

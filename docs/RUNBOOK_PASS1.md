@@ -353,6 +353,16 @@ second attach run fires zero requests). What it cannot prove: Google/HubSpot
 authentication and quotas, BigQuery-only SQL behaviour outside the shimmed
 functions, and the Drive sharing step — those are what `preflight` checks live.
 
+## Two surfaces (Cloud Shell, the notebooks) — what is shared and what is local
+
+Every surface runs the same `scripts/run_pass1.sh`, against the same BigQuery project and the
+same Drive, so `walk`, `bq-load`, `dbt` and `review` give the same result anywhere. Local to a
+clone: `.env`, the venv, and `.mrload/` (SQLite ledger, checkpoints, logs). The live HubSpot
+steps `attach-upload`, `attach-notes` and `deals-live` are idempotent **through the ledger
+only**: a second clone with an empty ledger uploads and creates again. Run them from one surface,
+or copy `.mrload/ledger.sqlite` before switching. `hs-props` and `companies-live` are idempotent
+through HubSpot itself (listing, name search) and are safe from any surface.
+
 ## Re-run / refresh semantics
 
 | you changed | re-run from |
