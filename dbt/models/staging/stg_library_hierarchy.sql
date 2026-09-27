@@ -13,6 +13,7 @@ select
     libr_category,
     asset_class,
     company_node_key,
+    deal_node_key,
     inferred_segment,
     inferred_company_name,
     inferred_deal_name,

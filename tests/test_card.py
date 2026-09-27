@@ -20,3 +20,15 @@ def test_asset_classification_first_match_wins():
     assert card.classify_asset(name="datasheet.pdf", mime="application/pdf") == "parked_for_review"
     assert card.classify_asset(name="PO_notes.docx", mime="application/x") == "asset"   # PO but not pdf
     assert card.classify_asset(name="x", mime="application/vnd.google-apps.shortcut") == "shortcut"
+
+
+def test_deal_inference_card_and_dbt_var_agree():
+    """The heuristic lives in the card (Python side) and in dbt vars (SQL side); they must match."""
+    import yaml
+    from pathlib import Path
+    from pipeline.library_files.card import load_library_card
+    card = load_library_card()
+    proj = yaml.safe_load((Path(__file__).resolve().parents[1] / "dbt" / "dbt_project.yml").read_text())
+    assert proj["vars"]["deal_exclude_regex"] == card.deal_exclude_regex()
+    assert int(proj["vars"]["deal_min_pdf"]) == card.deal_min_pdf
+    assert card.is_deal_excluded_name("2023 - Enlit Exibition (Paris)") and not card.is_deal_excluded_name("2026 Quantum sensor RFQ")

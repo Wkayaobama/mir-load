@@ -32,9 +32,16 @@ notebook calls prints masked values only, so the file is safe to keep in git.
 | B Dev Container | clone, `docker build`, `crlf_check.sh` + guarded LF fix, verify, *Reopen in Container* | no |
 | 4 `.env` clinic | `env_clinic.sh --fix`, `Set-EnvKey` (masked → `env_set.sh`), `env_clinic.sh`, `install_git_hooks.sh`, `guard_proof.sh` | no |
 | 5 Google auth | `gauth.sh`, then `auth_check.sh` | `gauth.sh` only (OAuth code) |
-| 6–7 pipeline | every `run_pass1.sh` step; LIVE steps blocked until `$ConfirmLive = $true` | no |
+| 6–7 pipeline | every `run_pass1.sh` step incl. `hs-props` / `hs-props-verify` (HubSpot property definitions → StackSync mapping sheet); LIVE steps blocked until `$ConfirmLive = $true` | no |
 | 8 rehearsals | unit tests, e2e clean, e2e dirty (must stop at the dbt gate) | no |
 | 9 troubleshooting | `last_log.sh`, `dbt_failures.sh`, `status`, `unmigrate` | no |
+
+**Second notebook — `notebooks/mr-load-run.dib`, the run sheet.** Same helpers (shared in
+`notebooks/mr-load-helpers.ps1`), no setup material: the 16 steps in order, one cell each,
+a *where am I* cell (`Get-PipelineState`, from `.mrload/checkpoints.tsv`), `Invoke-NextStep`
+for the next pending step, and `Invoke-Sequence -UntilLive`, which runs every pending DRY
+step in order and stops in front of the first LIVE gate. Use the compass once per machine,
+the run sheet every day.
 
 The same helpers are Tasks (`mr-load: env clinic`, `… auth check`, `… crlf check`,
 `… git guard proof`, `… dbt failures`, `… last log`) for people who prefer the palette.
@@ -122,6 +129,9 @@ carries HubSpot's JSON body in `exc.response.text`.
 problems without touching BigQuery; the failing test's SQL is in
 `dbt/target/compiled/.../tests/`. The DuckDB rehearsal target runs the same
 models locally: `MRLOAD_DBT_TARGET=duckdb` (see `dbt/README.md`).
+
+Walker traversal, classification grammar, every exclusion pattern and the deal layer:
+`docs/WALKER_DFS_AND_PATTERNS.md`.
 
 ## 5. Files added for the IDE
 

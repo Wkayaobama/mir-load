@@ -31,12 +31,15 @@ from pathlib import Path
 
 from .card import DEFAULT_CARD_PATH, load_library_card
 from .companies import company_folders_from_hierarchy, resolve_companies
+from .deal_anchors import deal_documents, qualify_deal_anchors
 from .deals import read_decisions, resolve_deals, write_decisions_template
 from .config import Settings
 from .drive_walker import ApiDriveLister, DriveFile, dfs_entries
 from .hierarchy import HierarchyWriter, read_hierarchy_csv
 from .ledger import LEDGER_TABLES, SqliteLedger
 from .manifest import load_manifest
+from .properties import (OK_STATUSES, ensure_properties, load_catalog, load_property_plan, summarize,
+                         verify_properties, write_mapping_sheet)
 from .silver_library import SilverIndexBuilder
 from .uploader import HubSpotFileUploader, LibraryFileRow
 from .walker import IMAGE_EXTS, DriveTreeWalker
@@ -47,6 +50,7 @@ APPROVE_FILES_UPLOAD_ENV = "MRLOAD_APPROVE_FILES_UPLOAD"
 APPROVE_FILE_NOTES_POST_ENV = "MRLOAD_APPROVE_FILE_NOTES_POST"
 APPROVE_UNMIGRATE_ENV = "MRLOAD_APPROVE_UNMIGRATE"
 APPROVE_DEAL_CREATE_ENV = "MRLOAD_APPROVE_DEAL_CREATE"
+APPROVE_PROPERTY_CREATE_ENV = "MRLOAD_APPROVE_PROPERTY_CREATE"
 
 
 def _gate(env: str) -> bool:
@@ -289,10 +293,58 @@ def cmd_review_export(args: argparse.Namespace) -> int:
             w.writeheader()
             w.writerows(subset)
         summary[name] = len(subset)
-    summary["deal_decisions.csv"] = write_decisions_template(rows, out_dir / "deal_decisions.csv")
+    card = load_library_card(Path(args.card)) if getattr(args, "card", None) else load_library_card()
+    anchors = qualify_deal_anchors(rows, card)
+    deferred = deal_documents(rows, anchors)
+    anchor_cols = ["deal_node_key", "legacy_deal_id", "deal_name", "anchor_kind", "company_node_key",
+                   "pdf_count", "deal_candidate_count", "asset_count", "link"]
+    with (out_dir / "deal_anchors.csv").open("w", encoding="utf-8", newline="") as fp:
+        w = csv.DictWriter(fp, fieldnames=anchor_cols); w.writeheader()
+        for a in sorted(anchors.values(), key=lambda a: (a.company_node_key, a.anchor_kind, a.deal_name)):
+            w.writerow({k: getattr(a, k) for k in anchor_cols})
+    with (out_dir / "deal_documents.csv").open("w", encoding="utf-8", newline="") as fp:
+        w = csv.DictWriter(fp, fieldnames=cols + ["legacy_deal_id", "deal_name"]); w.writeheader(); w.writerows(deferred)
+    summary["deal_anchors.csv"] = len(anchors)
+    summary["deal_documents.csv"] = len(deferred)
+    summary["deal_decisions.csv"] = write_decisions_template(rows, out_dir / "deal_decisions.csv", card=card)
     json.dump(summary, sys.stdout, indent=2)
     print()
     return 0
+
+
+def cmd_properties(args: argparse.Namespace) -> int:
+    """Schema propagation into HubSpot (definitions only; values flow through StackSync).
+
+    ensure  — create missing groups/properties from the card (gated; never modifies existing ones)
+    verify  — definitions vs the built silver model (dbt catalog) → StackSync mapping sheet
+    """
+    settings = Settings.from_env()
+    card = load_library_card(Path(args.card))
+    plan = load_property_plan(card.raw)
+    client = _client_or_none(settings)
+    if args.mode == "ensure":
+        _banner("properties ensure", [("property/group create", APPROVE_PROPERTY_CREATE_ENV)])
+        if client is None:
+            results = [{"object_type": f.object_type, "kind": "property", "name": f.name, "column": f.column,
+                        "type": f.type, "status": "unknown_no_token", "error": "HUBSPOT_SANDBOX_TOKEN unset"}
+                       for f in plan.fields]
+        else:
+            results = ensure_properties(client, plan, live=_gate(APPROVE_PROPERTY_CREATE_ENV))
+        print(json.dumps(results, indent=2))
+        print(f"properties ensure: {summarize(results)}", file=sys.stderr)
+        return 1 if any(r["status"] in ("failed", "type_mismatch") for r in results) else 0
+
+    _banner("properties verify", [])
+    catalog_path = Path(args.catalog)
+    catalog = load_catalog(catalog_path) if catalog_path.exists() else None
+    if catalog is None:
+        print(f"  no dbt catalog at {catalog_path} — checking HubSpot definitions only "
+              f"(run the dbt step; it generates the catalog)", file=sys.stderr)
+    rows = verify_properties(client, plan, catalog)
+    sheet = write_mapping_sheet(rows, Path(args.out_dir) / "stacksync_mapping.csv")
+    print(json.dumps(rows, indent=2))
+    print(f"properties verify: {summarize(rows)} → {sheet}", file=sys.stderr)
+    return 1 if any(r["status"] not in OK_STATUSES and r["status"] != "unknown_no_token" for r in rows) else 0
 
 
 def cmd_ledger_export(args: argparse.Namespace) -> int:
@@ -325,9 +377,11 @@ def cmd_deals(args: argparse.Namespace) -> int:
         print("decisions file is empty", file=sys.stderr)
         return 1
     ledger = _ledger(settings, args.ledger)
+    card = load_library_card(Path(args.card)) if args.card else load_library_card()
+    assoc = tuple(((card.raw.get("deal_inference") or {}).get("pass_2_associates")) or ["deal_candidate"])
     results = resolve_deals(
-        decisions, client=_client_or_none(settings), ledger=ledger,
-        live_create=_gate(APPROVE_DEAL_CREATE_ENV),
+        decisions, hierarchy_rows=read_hierarchy_csv(Path(args.hierarchy)), client=_client_or_none(settings),
+        ledger=ledger, live_create=_gate(APPROVE_DEAL_CREATE_ENV), associate_classes=assoc,
     )
     json.dump(results, sys.stdout, indent=2)
     print()
@@ -378,7 +432,15 @@ def main(argv: list[str] | None = None) -> int:
     rev = sub.add_parser("review-export", help="Operator queues + deal_decisions.csv template (offline).")
     rev.add_argument("--hierarchy", required=True)
     rev.add_argument("--out-dir", default=".mrload/review")
+    rev.add_argument("--card", default=None)
     rev.set_defaults(func=cmd_review_export)
+
+    props = sub.add_parser("properties", help="HubSpot property definitions for StackSync: ensure (gated) / verify + mapping sheet.")
+    props.add_argument("mode", choices=["ensure", "verify"])
+    props.add_argument("--card", default=str(DEFAULT_CARD_PATH))
+    props.add_argument("--catalog", default="dbt/target/catalog.json", help="dbt catalog of the built silver models (verify)")
+    props.add_argument("--out-dir", default=".mrload/review", help="where stacksync_mapping.csv is written (verify)")
+    props.set_defaults(func=cmd_properties)
 
     lex = sub.add_parser("ledger-export", help="Step 6: ledger tables → CSV → BigQuery (gated bq load).")
     lex.add_argument("--ledger")
@@ -388,6 +450,8 @@ def main(argv: list[str] | None = None) -> int:
 
     dl = sub.add_parser("deals", help="Pass 2: deals from the approved decisions file (gated).")
     dl.add_argument("--decisions", required=True, help="edited .mrload/review/deal_decisions.csv")
+    dl.add_argument("--hierarchy", required=True, help="library_hierarchy.csv (which PO/Billing notes belong to each anchor)")
+    dl.add_argument("--card", default=None)
     dl.add_argument("--ledger")
     dl.add_argument("--pipeline", help="default pipeline id (or MRLOAD_DEAL_PIPELINE)")
     dl.add_argument("--dealstage", help="default dealstage id (or MRLOAD_DEAL_STAGE)")

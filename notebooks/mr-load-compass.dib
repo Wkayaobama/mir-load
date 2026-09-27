@@ -65,9 +65,12 @@ flowchart TD
     P["preflight\ntools · env · Drive root · token"] --> W["walk\nDrive DFS → .mrload/library_hierarchy.csv"]
     W --> BI["bq-init\ndatasets + empty ledger tables"]
     BI --> BL["bq-load  ⟨LIVE gate BQ_LOAD⟩\nCSV → mrload_raw.library_hierarchy"]
-    BL --> D["dbt run + test\ncardinality contract = the gate"]
+    BL --> HP["hs-props ⟨PROPERTY_CREATE⟩\nHubSpot property DEFINITIONS (StackSync targets)"]
+    HP --> D["dbt run + test + docs generate\ncardinality contract = the gate"]
+    D --> HV["hs-props-verify\ndefinitions vs built silver → stacksync_mapping.csv"]
+    HV --> R
     D -- "any test fails → STOP, nothing else fires" --> X((stop))
-    D --> R["review\noperator queues · deal_decisions.csv"]
+    R["review\noperator queues · deal_decisions.csv"]
     R --> C1["companies-dry"] --> C2["companies-live ⟨COMPANY_CREATE⟩"]
     C2 --> A1["attach-dry"] --> A2["attach-upload ⟨FILES_UPLOAD⟩\nphase 1: Drive → HubSpot Files"]
     A2 --> A3["attach-notes ⟨FILE_NOTES_POST⟩\nphase 2: note + association"]
@@ -78,13 +81,16 @@ flowchart TD
 
 ## 0 · Switches and helpers — run this first, every time
 
-Edit the values, then run. `Invoke-Ubuntu '<bash command>'` runs one command line in the
-repo, inside the Ubuntu of the chosen route, with the venv active. `-Live` prepends
+Edit the values, then run. The cell then loads `notebooks/mr-load-helpers.ps1` (shared with
+the run-sheet notebook `mr-load-run.dib`): `Invoke-Ubuntu '<bash command>'` runs one command
+line in the repo, inside the Ubuntu of the chosen route, with the venv active. `-Live` prepends
 `YES_ALL=1` (skips the runner's confirmation prompts) and only works when `$ConfirmLive` is true.
-`-Stdin '<text>'` pipes text into the command (used for secrets).
+`-Stdin '<text>'` pipes text into the command (used for secrets). The helpers also set
+`WSL_UTF8=1`: without it `wsl.exe` writes UTF‑16 when its output is captured, and every line in
+this notebook would come out as `g.a.r.b.l.e.d`.
 
-`$env:WSL_UTF8 = '1'` matters: without it `wsl.exe` writes UTF‑16 when its output is
-captured, and every line in this notebook would come out as `g.a.r.b.l.e.d`.
+Once this machine is set up, switch to **`mr-load-run.dib`** for day-to-day execution: the 16
+steps in order, a *where am I* cell, and `Invoke-NextStep`.
 
 #!pwsh
 
@@ -98,80 +104,20 @@ $RepoLinux   = '/workspaces/mir-load'                  # route linux: repo path 
 $Branch      = 'claude/mr-load-library-system-dphpbj'
 $Repo        = 'https://github.com/Wkayaobama/mir-load.git'
 $ConfirmLive = $false                                  # flip to $true ONLY when you intend BigQuery/HubSpot writes
-$env:WSL_UTF8 = '1'
 
-# ── helpers ─────────────────────────────────────────────────────────────────
-function Invoke-Ubuntu {
-    param(
-        [Parameter(Mandatory, Position = 0)][string]$Command,
-        [switch]$Live,
-        [string]$Stdin
-    )
-    $prefix = ''
-    if ($Live) {
-        if (-not $ConfirmLive) { Write-Warning "LIVE step refused: set `$ConfirmLive = `$true in the Switches cell first. Not run: $Command"; return }
-        $prefix = 'YES_ALL=1 '
-    }
-    $venv = '{ [ -f .venv/bin/activate ] && . .venv/bin/activate; }; '
-    switch ($Route) {
-        'wsl' {
-            $exe  = 'wsl.exe'
-            $nativeArgs = @('-d', $Distro, '-e', 'bash', '-lc', "cd $RepoWsl && $venv$prefix$Command")
-        }
-        'devcontainer' {
-            $exe  = 'docker'
-            $nativeArgs = @('run', '--rm')
-            if ($PSBoundParameters.ContainsKey('Stdin')) { $nativeArgs += '-i' }
-            $nativeArgs += @('-v', "${RepoWin}:/work", '-v', 'mrload-gcloud:/root/.config/gcloud', '-w', '/work',
-                             '-e', 'MRLOAD_VENV=/opt/venv', $Image, 'bash', '-lc', "$prefix$Command")
-        }
-        'linux' {
-            $exe  = 'bash'
-            $nativeArgs = @('-lc', "cd $RepoLinux && $venv$prefix$Command")
-        }
-        default { throw "unknown route '$Route' (wsl | devcontainer | linux)" }
-    }
-    if ($PSBoundParameters.ContainsKey('Stdin')) { $Stdin | & $exe @nativeArgs } else { & $exe @nativeArgs }
-    if ($LASTEXITCODE -ne 0) { Write-Host "✖ exit code $LASTEXITCODE  [$Route]" -ForegroundColor Red }
-    else                     { Write-Host "✔ done  [$Route]" -ForegroundColor Green }
+# ── load the shared helpers (notebooks/mr-load-helpers.ps1: Invoke-Ubuntu, Open-UbuntuTerminal, Set-EnvKey, Invoke-Step, Get-PipelineState …) ──
+$candidates = @((Join-Path $RepoWin 'notebooks\mr-load-helpers.ps1'),
+                (Join-Path $PWD 'mr-load-helpers.ps1'),
+                (Join-Path $PWD 'notebooks\mr-load-helpers.ps1'),
+                (Join-Path $RepoLinux 'notebooks/mr-load-helpers.ps1'))
+if ($Route -eq 'wsl' -and (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+    $linuxHome  = (wsl.exe -d $Distro -e bash -lc 'echo $HOME' | Select-Object -First 1).Trim()
+    $candidates += "\\wsl$\$Distro" + ((($RepoWsl -replace '^~', $linuxHome) -replace '/', '\')) + '\notebooks\mr-load-helpers.ps1'
 }
-
-function Open-UbuntuTerminal {
-    # A real terminal in the route's Ubuntu — for the steps that need a keyboard (sudo password, OAuth code).
-    switch ($Route) {
-        'wsl'          { $cmd = 'wsl.exe'; $cargs = @('-d', $Distro, '--cd', '~') }
-        'devcontainer' { $cmd = 'docker';  $cargs = @('run', '-it', '--rm', '-v', "${RepoWin}:/work", '-v', 'mrload-gcloud:/root/.config/gcloud', '-w', '/work', $Image, 'bash') }
-        default        { Write-Host "route linux: you are already inside Ubuntu — use the VS Code terminal."; return }
-    }
-    if     (Get-Command wezterm -ErrorAction SilentlyContinue) { Start-Process wezterm -ArgumentList (@('start', '--', $cmd) + $cargs) }
-    elseif (Get-Command wt      -ErrorAction SilentlyContinue) { Start-Process wt      -ArgumentList (@($cmd) + $cargs) }
-    else                                                        { Start-Process $cmd    -ArgumentList $cargs }
-    Write-Host "terminal opened: $cmd $($cargs -join ' ')" -ForegroundColor Cyan
-}
-
-function Set-EnvKey {
-    # Masked prompt → value piped into scripts/dev/env_set.sh inside Ubuntu. Nothing is stored in this notebook.
-    param([Parameter(Mandatory)][string]$Key, [switch]$Plain)
-    if ($Plain) { $value = Read-Host "$Key" }
-    else {
-        $sec   = Read-Host -AsSecureString "$Key (hidden)"
-        $value = [System.Net.NetworkCredential]::new('', $sec).Password
-    }
-    if (-not $value) { Write-Warning "empty value — nothing written"; return }
-    Invoke-Ubuntu "scripts/dev/env_set.sh $Key" -Stdin $value
-    Remove-Variable value, sec -ErrorAction SilentlyContinue
-}
-
-function Show-Route {
-    "route        : $Route"
-    switch ($Route) {
-        'wsl'          { "distro       : $Distro`nrepo (linux) : $RepoWsl" }
-        'devcontainer' { "image        : $Image`nrepo (win)   : $RepoWin  → /work" }
-        'linux'        { "repo         : $RepoLinux" }
-    }
-    "branch       : $Branch"
-    "ConfirmLive  : $ConfirmLive   (LIVE cells " + $(if ($ConfirmLive) { 'WILL FIRE' } else { 'are blocked' }) + ")"
-}
+$helpers = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+if (-not $helpers) { throw "mr-load-helpers.ps1 not found. Looked in: $($candidates -join ' | '). Set `$RepoWin to your Windows clone (or open the repo folder in VS Code) and re-run." }
+Invoke-Expression (Get-Content -Raw $helpers)
+"helpers: $helpers"
 Show-Route
 
 #!markdown
@@ -588,6 +534,21 @@ Invoke-Ubuntu 'scripts/run_pass1.sh bq-load' -Live
 
 #!markdown
 
+### 6.3b · hs-props — **LIVE** (gate `MRLOAD_APPROVE_PROPERTY_CREATE`), definitions only
+Creates the HubSpot property **definitions** declared in `context/cards/library.yaml`
+(`hubspot.properties`): group `mrload_library` on companies, notes and deals, prefix `mrload_`.
+No values are written here; the values reach HubSpot through StackSync (BigQuery silver →
+HubSpot, matched on the record ids that `ledger-export` writes back), and StackSync cannot map a
+property that does not exist. Idempotent: `exists` everywhere on a re-run. An existing definition
+with another type is reported as `type_mismatch` and never modified. A `403` names the missing
+schema-write scope of the private app.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh hs-props' -Live
+
+#!markdown
+
 ### 6.4 · dbt — run + test: **the cardinality gate**
 Builds `stg_library_hierarchy`, `silver_library_company`, `silver_library_index`,
 `_deal_candidates`, `_parked`, `_orphans` on BigQuery and runs the contract tests (unique
@@ -601,12 +562,28 @@ Invoke-Ubuntu 'scripts/run_pass1.sh dbt'
 
 #!markdown
 
+### 6.4b · hs-props-verify — definitions vs the silver models as built (no gate)
+Reads `dbt/target/catalog.json` (the `dbt` step runs `dbt docs generate` between run and test) and checks every
+declared property twice: the HubSpot definition exists with the declared type, and the mapped
+column exists in the built silver model. Writes `.mrload/review/stacksync_mapping.csv`: one
+`match_key` row and one `property` row per object type, which is exactly what you enter in the
+StackSync UI (source = `bigquery_table`, match = `bigquery_column` ↔ Record ID, fields =
+`bigquery_column` → `hubspot_property`). Expected: `ok` on every row.
+
+#!pwsh
+
+Invoke-Ubuntu 'scripts/run_pass1.sh hs-props-verify'
+Invoke-Ubuntu 'head -5 .mrload/review/stacksync_mapping.csv | cut -c1-180'
+
+#!markdown
+
 ### 6.5 · review — operator queues (offline)
 Writes `.mrload/review/`: `companies.csv` (the company objects that will be searched or
 created — names are folder names), `deal_candidates.csv` (PO / Billing PDFs, pass 2),
 `parked_for_review.csv` (other PDFs), `orphans.csv` (files with no company folder, never
 attached), `multi_parent.csv` (files linked into two or more folders — must be empty before
-going live) and the `deal_decisions.csv` template you edit before pass 2.
+going live), `deal_anchors.csv` / `deal_documents.csv` (the inferred deals and their deferred documents) and the
+`deal_decisions.csv` template, one row per inferred deal, you edit before pass 2.
 
 #!pwsh
 
@@ -670,8 +647,8 @@ Invoke-Ubuntu 'scripts/run_pass1.sh status'
 ---
 # 7 · Pass 2 — deals from PO / Billing PDFs (only after you edited the decisions file)
 
-Edit `.mrload/review/deal_decisions.csv` (VS Code, Rainbow CSV): keep/skip per candidate,
-amounts, pipeline/stage overrides. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
+Edit `.mrload/review/deal_decisions.csv` (VS Code, Rainbow CSV): one row per inferred deal (level-3 folder with a PDF
+beneath, or a PO/Billing PDF directly under the company); approve per row, amounts, pipeline/stage overrides. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
 
 #!pwsh
 

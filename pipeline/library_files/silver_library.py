@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
+from .deal_anchors import qualify_deal_anchors
 from .walker import CAT_COMPANY, DriveTreeWalker, IndexNode
 
 _PARITY_COLS_TEMPLATE = [
@@ -34,7 +35,7 @@ _PARITY_COLS_TEMPLATE = [
     "{p}_owner_fullname", "loaded_at",
 ]
 _EXTRA_COLS = [
-    "node_key", "parent_key", "company_node_key", "asset_class",
+    "node_key", "parent_key", "company_node_key", "deal_node_key", "asset_class",
     "inferred_segment", "inferred_company_name", "inferred_deal_name",
     "inferred_year", "path_code", "depth", "drive_file_id", "drive_md5",
     "drive_size", "drive_mimetype", "parents_count",
@@ -78,6 +79,7 @@ class SilverIndexBuilder:
         self.require_anchor = require_anchor
         self.stats = SilverStats()
         self._company_ids: dict[str, str] = {}
+        self._deal_ids: dict[str, str] = {}      # deal_node_key → legacy_deal_id (qualified anchors only)
 
     def _row(self, node: IndexNode, loaded_at: str) -> Optional[dict]:
         name = node.entry.name.strip()
@@ -99,7 +101,8 @@ class SilverIndexBuilder:
             "legacy_library_id": lib_id,
             "legacy_company_id": company_legacy_id,
             "legacy_contact_id": None,
-            "legacy_deal_id": None,
+            "legacy_deal_id": self._deal_ids.get(node.deal_node_key or "") or (
+                self._deal_ids.get(node.node_key) if not node.entry.is_dir else None),
             "legacy_case_id": None,
             "legacy_file_path": node.legacy_file_path,
             "legacy_file_name": name,
@@ -118,6 +121,7 @@ class SilverIndexBuilder:
             "node_key": node.node_key,
             "parent_key": node.parent_key,
             "company_node_key": node.company_node_key,
+            "deal_node_key": node.deal_node_key,
             "asset_class": node.asset_class,
             "inferred_segment": node.inferred_segment,
             "inferred_company_name": node.inferred_company_name,
@@ -136,7 +140,19 @@ class SilverIndexBuilder:
         self.stats = SilverStats()
         self._company_ids = {}
         loaded_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        for node in self.walker.walk(entries):
+        nodes = list(self.walker.walk(entries))
+        # deal layer: qualify the level-3 anchors on a hierarchy-shaped view of the nodes (same rule as dbt)
+        self._deal_ids = {}
+        if self.walker.card is not None:
+            shaped = [{
+                "node_key": n.node_key, "node_name": n.entry.name, "is_dir": str(n.entry.is_dir),
+                "deal_node_key": n.deal_node_key, "company_node_key": n.company_node_key,
+                "asset_class": n.asset_class, "extension": n.entry.extension,
+                "legacy_library_id": self.walker.legacy_library_id(n, scheme=self.id_scheme),
+                "link": n.entry.link, "drive_id": n.entry.drive_id,
+            } for n in nodes]
+            self._deal_ids = {k: a.legacy_deal_id for k, a in qualify_deal_anchors(shaped, self.walker.card).items()}
+        for node in nodes:
             self.stats.total_nodes += 1
             row = self._row(node, loaded_at)
             if row is None:

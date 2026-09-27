@@ -19,7 +19,7 @@ from .walker import DriveTreeWalker, IndexNode
 HIERARCHY_COLUMNS = [
     "node_key", "node_name", "parent_key", "depth", "rel_path",
     "legacy_file_path", "legacy_library_id", "is_dir", "libr_category",
-    "asset_class", "company_node_key", "inferred_segment",
+    "asset_class", "company_node_key", "deal_node_key", "inferred_segment",
     "inferred_company_name", "inferred_deal_name", "inferred_year",
     "path_code", "drive_id", "drive_mimetype", "drive_size", "drive_md5",
     "drive_created_at", "drive_modified_at", "owner_email", "owner_name",
@@ -54,6 +54,7 @@ def hierarchy_row(node: IndexNode, walker: DriveTreeWalker, walked_at: str, *, i
         "libr_category": node.category,
         "asset_class": node.asset_class,
         "company_node_key": node.company_node_key,
+        "deal_node_key": node.deal_node_key,
         "inferred_segment": node.inferred_segment,
         "inferred_company_name": node.inferred_company_name,
         "inferred_deal_name": node.inferred_deal_name,
