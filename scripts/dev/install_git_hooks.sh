@@ -2,6 +2,7 @@
 # Installs a pre-commit hook that refuses to commit env files or obvious secrets.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/.git/hooks/pre-commit"
+[[ -d "$REPO_ROOT/.git" ]] || { echo "✖ $REPO_ROOT is not a git repository (unzipped download?) — no hook to install. Convert it in place first: see scripts/dev/env_clinic.sh → git safety." >&2; exit 1; }
 cat >"$HOOK" <<'EOF'
 #!/usr/bin/env bash
 # mr-load secret guard (installed by scripts/dev/install_git_hooks.sh)

@@ -82,6 +82,15 @@ t="${EFF[HUBSPOT_SANDBOX_TOKEN]:-}"
 for k in "${!EFF[@]}"; do [[ "${EFF[$k]}" == *$'\r'* ]] && bad "$k value carries \\r"; done
 
 echo "── git safety ──"
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  warn "not a git repository (an unzipped download?) — nothing can be committed from here, so no secret can leak through git;"
+  echo "   the .gitignore is already in place for the day you convert it. To turn this folder into a clone IN PLACE (keeps .env, .mrload/):"
+  echo "     git init -q && git remote add origin https://github.com/Wkayaobama/mir-load.git \\"
+  echo "       && git fetch -q origin claude/mr-load-library-system-dphpbj && git reset -q --hard origin/claude/mr-load-library-system-dphpbj \\"
+  echo "       && scripts/dev/install_git_hooks.sh          # restores exec bits, enables git pull and the pre-commit guard"
+  GIT_SAFETY_SKIPPED=1
+fi
+if [[ "${GIT_SAFETY_SKIPPED:-0}" != "1" ]]; then
 git check-ignore -q .env && ok ".env is ignored by git" || bad ".env is NOT ignored (check .gitignore)"
 git check-ignore -q .env.mrload && ok ".env.mrload is ignored by git" || bad ".env.mrload is NOT ignored"
 tracked="$(git ls-files | grep -E '(^|/)\.env(\.|$)' | grep -v '\.env\.mrload\.example$' || true)"
@@ -89,5 +98,6 @@ tracked="$(git ls-files | grep -E '(^|/)\.env(\.|$)' | grep -v '\.env\.mrload\.e
 staged="$(git diff --cached --name-only | grep -E '(^|/)\.env(\.|$)' | grep -v example || true)"
 [[ -z "$staged" ]] && ok "no env file staged" || bad "STAGED env file(s): $staged — git restore --staged <file>"
 { [[ -x .git/hooks/pre-commit ]] && grep -q mr-load .git/hooks/pre-commit; } && ok "pre-commit secret guard installed" || warn "pre-commit guard not installed → scripts/dev/install_git_hooks.sh"
+fi
 echo
 (( ISSUES == 0 )) && ok "env clinic: no blocking issue" || { bad "env clinic: $ISSUES blocking issue(s)"; exit 1; }

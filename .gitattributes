@@ -37,3 +37,4 @@ scripts/e2e/bin/* text eol=lf
 *.dib           text eol=lf
 *.ps1           text eol=lf
 *.ipynb         text eol=lf
+*.xlsx binary
