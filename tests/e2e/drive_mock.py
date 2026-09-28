@@ -121,6 +121,17 @@ def build_tree(scenario: str) -> Tree:
     t.add("Lionix PDK notes.docx", [companies["Lionix"]],
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
+    # Year-prefixed folders at COMPANY level: the walker makes them self-anchored engagement folders (not
+    # company_folder rows) → companies.py never resolves them, their files are neither attached nor indexed
+    # (WARN test). Pass 2 salvages their deals by the remainder name: ELTA exists in the HubSpot mock
+    # (seeded company 9002), Aselsan does not → hubspot_companies_import.csv.
+    elta = t.add("2021_ELTA", [quantum], FOLDER)
+    tender = t.add("Tender", [elta], FOLDER)
+    t.add("offer.pdf", [tender]); t.add("PO ELTA-7.pdf", [tender])
+    asel = t.add("2022_Aselsan", [quantum], FOLDER)
+    rfp = t.add("RFP", [asel], FOLDER)
+    t.add("quote.pdf", [rfp]); t.add("PO AS-1.pdf", [rfp])
+
     if scenario == "dirty":
         t.add("shared datasheet.pdf", [th, to])                  # multi-parent → REJECT
         dup = t.add("Toshiba", [quantum], FOLDER)                # duplicate company name → STOP

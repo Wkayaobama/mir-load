@@ -22,16 +22,19 @@ def jload(p):
 
 hier = list(csv.DictReader((R / "library_hierarchy.csv").open(encoding="utf-8")))
 files = [r for r in hier if r["is_dir"] == "False"]
-attachable = [r for r in files if r["company_node_key"] and r["asset_class"] != "shortcut"]
 companies = [r for r in hier if r["libr_category"] == "company_folder"]
-deal_cands = [r for r in files if r["asset_class"] == "deal_candidate"]
 company_of = {r["node_key"]: r["node_name"] for r in companies}
+# pass 1 attaches (and silver indexes) only files anchored to a COMPANY FOLDER; files under a year-prefixed
+# company-level folder (2021_ELTA, 2022_Aselsan) carry a self-anchored key that is not a company folder
+attachable = [r for r in files if r["company_node_key"] in company_of and r["asset_class"] != "shortcut"]
+engagement_files = [r for r in files if r["company_node_key"] and r["company_node_key"] not in company_of and r["asset_class"] != "shortcut"]
+deal_cands = [r for r in files if r["asset_class"] == "deal_candidate"]
 
 # 1. walk
 check("walk: tradeshow subtree pruned", not any(r["rel_path"].startswith("70 Tradeshows") for r in hier),
       f"{len(hier)} nodes")
 check("walk: 7 company folders (6 Quantum + 1 Photonics)", len(companies) == 7, str(len(companies)))
-check("walk: 5 deal candidates (PO/Billing PDFs, case-insensitive, any depth)", len(deal_cands) == 5,
+check("walk: 7 deal candidates (PO/Billing PDFs, case-insensitive, any depth)", len(deal_cands) == 7,
       ", ".join(r["node_name"] for r in deal_cands))
 # deal layer, structural half (walker): level-3 key set on the first folder under a company and inherited
 by_path = {r["rel_path"]: r for r in hier}
@@ -46,8 +49,9 @@ check("walk: orphan at segment level has no company anchor",
       any(r["node_name"].startswith("251226") and not r["company_node_key"] for r in files))
 check("walk: no multi-parent / duplicate keys (clean scenario)",
       all((r["parents_count"] or "1") == "1" for r in hier) and len({r["node_key"] for r in hier}) == len(hier))
-check("walk: every attachable file anchors to an existing company folder",
-      all(r["company_node_key"] in company_of for r in attachable), f"{len(attachable)} attachable")
+check("walk: 4 files under year-prefixed company-level folders (2021_ELTA, 2022_Aselsan) are self-anchored to a non-company row: not attached, not indexed, salvaged in pass 2",
+      len(engagement_files) == 4 and all(r["rel_path"].startswith(("Quantum/2021_ELTA", "Quantum/2022_Aselsan")) for r in engagement_files),
+      str(len(engagement_files)))
 
 # 2. bq stub
 bq = jload(R / "bqstub" / "state.json")
@@ -151,10 +155,12 @@ try:
           n_with_deal == 9, str(n_with_deal))
     py_anchors = list(csv.DictReader((R / "review" / "deal_anchors.csv").open(encoding="utf-8")))
     py_docs = list(csv.DictReader((R / "review" / "deal_documents.csv").open(encoding="utf-8")))
-    check("deal: Python qualifier (review/deal_anchors.csv) agrees with the dbt model, name by name",
-          sorted(a["deal_name"] for a in py_anchors) == sorted(deal_names), str(len(py_anchors)))
-    check("deal: 4 deferred documents beneath anchors (quote, SOW, gds x2) listed in review/deal_documents.csv, none of them PO/Billing",
-          sorted(dd["node_name"] for dd in py_docs) == ["Quote QS-17.pdf", "SOW.docx", "layout.gds", "lnoi_MZI_tests.gds"]
+    py_company_anchors = [a for a in py_anchors if a["company_node_key"] in company_of]
+    check("deal: Python qualifier agrees with the dbt model for company-folder anchors; the two orphan anchors (Tender, RFP) exist only on the Python side",
+          sorted(a["deal_name"] for a in py_company_anchors) == sorted(deal_names)
+          and {a["deal_name"] for a in py_anchors} - set(deal_names) == {"Tender", "RFP"}, str(len(py_anchors)))
+    check("deal: 6 deferred documents beneath anchors (quotes, SOW, gds x2, offer) listed in review/deal_documents.csv, none of them PO/Billing",
+          sorted(dd["node_name"] for dd in py_docs) == ["Quote QS-17.pdf", "SOW.docx", "layout.gds", "lnoi_MZI_tests.gds", "offer.pdf", "quote.pdf"]
           and all(dd["asset_class"] != "deal_candidate" for dd in py_docs), str(len(py_docs)))
     check("silver: hs_note_id populated for every index row after ledger-export", n_note == n_idx, f"{n_note}/{n_idx}")
     check("silver: hs_company_id populated for all 7 companies", n_co == 7, str(n_co))
@@ -166,11 +172,42 @@ except Exception as exc:  # pragma: no cover
 dl = dict(q("select status, count(*) from deals_created group by status"))
 deal_assoc_co = [a for a in hs["associations"] if a["from"].startswith("deal:") and a["to"].startswith("company:")]
 note_assoc_deal = [a for a in hs["associations"] if a["from"].startswith("note:") and a["to"].startswith("deal:")]
-check("pass 2: 5 deals created from approved decisions (one per inferred anchor, not per PDF)",
-      dl.get("created") == 5 and len(hs["deals"]) == 5, str(dl))
-check("pass 2: 5 deal→company associations; 5 note→deal (only the PO/Billing notes; the quote and SOW deferred)",
-      len(deal_assoc_co) == 5 and len(note_assoc_deal) == 5, f"{len(deal_assoc_co)}/{len(note_assoc_deal)}")
-check("pass 2: hs_deal_id visible on all 5 deal-candidate files through their anchor", n_deal == 5, str(n_deal))
+check("pass 2: 6 deals created from 7 approved anchors (one per anchor, not per PDF; Aselsan's has no company)",
+      dl.get("created") == 6 and len(hs["deals"]) == 6, str(dl))
+check("pass 2: 6 deal→company associations; 5 note→deal (PO/Billing notes only; ELTA's PO was never attached — strict pass 1)",
+      len(deal_assoc_co) == 6 and len(note_assoc_deal) == 5, f"{len(deal_assoc_co)}/{len(note_assoc_deal)}")
+check("pass 2: hs_deal_id visible on the 5 indexed deal-candidate files through their anchor", n_deal == 5, str(n_deal))
+
+# 7b. orphan salvage (pass 2 enrichment) + HubSpot import files + strict pass 1
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from pipeline.library_files.hubspot_import import deal_import_columns  # noqa: E402
+co_rows = {r[0]: r for r in q("select company_node_key, company_name, hs_company_id, status from companies_resolved")}
+elta_key = next((k for k in co_rows if k.endswith("|2021_ELTA")), None)
+asel_key = next((k for k in co_rows if k.endswith("|2022_Aselsan")), None)
+elta_deal = [a for a in deal_assoc_co if a["to"] == "company:9002"]
+check("salvage: ELTA (year-prefixed company folder) found by name in the portal → ledger matched_by_name_pass2 → its deal associated to company 9002, with 0 notes",
+      elta_key is not None and co_rows[elta_key][1:] == ("ELTA", "9002", "matched_by_name_pass2") and len(elta_deal) == 1
+      and not any(a["to"] == elta_deal[0]["from"] for a in note_assoc_deal), str(co_rows.get(elta_key)))
+check("salvage: Aselsan not in the portal → ledger not_in_portal_pass2 (null id), no deal created, nothing created in HubSpot for it",
+      asel_key is not None and co_rows[asel_key][1:] == ("Aselsan", None, "not_in_portal_pass2")
+      and all(c["properties"]["name"] != "Aselsan" for c in hs["companies"].values()), str(co_rows.get(asel_key)))
+attach_again = jload(R / "attach_after_salvage.json")
+check("strict pass 1: an attach dry run after the salvage still lists only the company-folder files (ELTA's files stay unattached)",
+      len(attach_again) == len(attachable), f"{len(attach_again)} vs {len(attachable)}")
+imp = list(csv.DictReader((R / "review" / "hubspot_deals_import.csv").open(encoding="utf-8")))
+ledger_deal_ids = {r[1] for r in q("select legacy_library_id, hs_deal_id from deals_created where hs_deal_id is not null")}
+check("import: hubspot_deals_import.csv has one row per inferred anchor (7), header == the card-derived column set",
+      len(imp) == 7 and list(imp[0].keys()) == deal_import_columns(load_library_card()), str(len(imp)))
+check("import: Record ID filled from the ledger on the 6 API-created deals, blank on the Aselsan row; Pipeline / Deal Stage blank everywhere",
+      {r["Record ID"] for r in imp if r["Record ID"]} == ledger_deal_ids and len(ledger_deal_ids) == 6
+      and all(r["Pipeline"] == "" and r["Deal Stage"] == "" for r in imp)
+      and next(r for r in imp if r["Company Name"] == "Aselsan")["Record ID"] == "")
+check("import: Company Record ID filled on 6 rows (incl. ELTA → 9002); company status resolved×5 / salvaged×1 / missing_in_portal×1",
+      sum(1 for r in imp if r["Company Record ID"]) == 6 and next(r for r in imp if r["Company Name"] == "ELTA")["Company Record ID"] == "9002"
+      and sorted(r["Company status (mr-load)"] for r in imp) == ["missing_in_portal", "resolved", "resolved", "resolved", "resolved", "resolved", "salvaged"])
+comp = list(csv.DictReader((R / "review" / "hubspot_companies_import.csv").open(encoding="utf-8")))
+check("import: hubspot_companies_import.csv lists exactly the confirmed-missing company (Aselsan) with its Drive folder link",
+      [c["Company name"] for c in comp] == ["Aselsan"] and comp[0]["Description"].startswith("Drive folder: https://"), str(comp[:1]))
 
 # 8. sequence bookkeeping: checkpoints + pipeline_state (what the run-sheet notebook reads)
 ck = [l.split("\t") for l in (R / "checkpoints.tsv").read_text().splitlines()]

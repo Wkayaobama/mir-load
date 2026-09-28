@@ -99,7 +99,10 @@ Known property of rule 1, deliberately left as is on this branch: a year-prefixe
 company level (`2021_ELTA`) becomes an `engagement_folder` that is also its own company anchor,
 and `silver_library_company` only takes `company_folder` rows, so its files are not in the
 index. The singular test `assert_every_attachable_file_indexed` (severity WARN) makes that
-visible; changing the company grammar is a separate decision.
+visible; changing the company grammar is a separate decision. Pass 2 compensates for the deals
+only: an anchor under such a folder is salvaged by looking the company up in HubSpot by the
+remainder name (`ELTA`), never by creating it, and the strict pass-1 rule keeps its files
+unattached (`ledger.company_map()` hides `*_pass2` rows from attach).
 
 ## 5. File classification (asset class, first match wins)
 
@@ -146,6 +149,7 @@ behaviour that existed before this branch.
 | beneath a folder that does not qualify | NULL | none |
 | directly under the company, PO/Billing PDF | its own id | one deal, its own note |
 | directly under the company, anything else | NULL | none |
+| beneath a qualified folder under a **year-prefixed company-level folder** (`2021_ELTA/Tender`) | the folder's id | the deal is created only if the remainder name (`ELTA`) exists in the portal (salvage, search only); otherwise the company is listed in `hubspot_companies_import.csv`; its PO/Billing notes do not exist (files under such folders are not attached) |
 
 **Cardinality added to the card.** `Company → Deal` 1:N; `Deal → Company` N:1 (REJECT,
 relationship test on `legacy_company_id`); `Library → Deal` N:0..1 (REJECT when set,

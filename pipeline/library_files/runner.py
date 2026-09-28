@@ -36,6 +36,7 @@ from .deals import read_decisions, resolve_deals, write_decisions_template
 from .config import Settings
 from .drive_walker import ApiDriveLister, DriveFile, dfs_entries
 from .hierarchy import HierarchyWriter, read_hierarchy_csv
+from .hubspot_import import write_hubspot_import_files
 from .ledger import LEDGER_TABLES, SqliteLedger
 from .manifest import load_manifest
 from .properties import (OK_STATUSES, ensure_properties, load_catalog, load_property_plan, summarize,
@@ -307,6 +308,9 @@ def cmd_review_export(args: argparse.Namespace) -> int:
     summary["deal_anchors.csv"] = len(anchors)
     summary["deal_documents.csv"] = len(deferred)
     summary["deal_decisions.csv"] = write_decisions_template(rows, out_dir / "deal_decisions.csv", card=card)
+    # HubSpot-Import-ready files, always: ids from the ledger when it exists (bootstrapped if not; no network)
+    ledger = _ledger(Settings.from_env(), getattr(args, "ledger", None))
+    summary.update(write_hubspot_import_files(rows, anchors, out_dir=out_dir, card=card, ledger=ledger))
     json.dump(summary, sys.stdout, indent=2)
     print()
     return 0
@@ -378,11 +382,18 @@ def cmd_deals(args: argparse.Namespace) -> int:
         return 1
     ledger = _ledger(settings, args.ledger)
     card = load_library_card(Path(args.card)) if args.card else load_library_card()
+    hierarchy_rows = read_hierarchy_csv(Path(args.hierarchy))
     assoc = tuple(((card.raw.get("deal_inference") or {}).get("pass_2_associates")) or ["deal_candidate"])
     results = resolve_deals(
-        decisions, hierarchy_rows=read_hierarchy_csv(Path(args.hierarchy)), client=_client_or_none(settings),
+        decisions, hierarchy_rows=hierarchy_rows, client=_client_or_none(settings),
         ledger=ledger, live_create=_gate(APPROVE_DEAL_CREATE_ENV), associate_classes=assoc,
     )
+    # refresh the HubSpot-Import-ready files with this run's results overlaid on the ledger (stderr: stdout is the JSON list)
+    anchors = qualify_deal_anchors(hierarchy_rows, card)
+    out_dir = Path(args.out_dir) if args.out_dir else Path(args.decisions).parent
+    imp = write_hubspot_import_files(hierarchy_rows, anchors, out_dir=out_dir, card=card,
+                                     decisions=decisions, results=results, ledger=ledger)
+    print(f"hubspot import files ({out_dir}): {json.dumps(imp)}", file=sys.stderr)
     json.dump(results, sys.stdout, indent=2)
     print()
     return 1 if any(r["status"] in ("failed", "partial") for r in results) else 0
@@ -429,10 +440,11 @@ def main(argv: list[str] | None = None) -> int:
     un.add_argument("--ledger")
     un.set_defaults(func=cmd_unmigrate)
 
-    rev = sub.add_parser("review-export", help="Operator queues + deal_decisions.csv template (offline).")
+    rev = sub.add_parser("review-export", help="Operator queues + deal_decisions.csv + HubSpot import files (offline).")
     rev.add_argument("--hierarchy", required=True)
     rev.add_argument("--out-dir", default=".mrload/review")
     rev.add_argument("--card", default=None)
+    rev.add_argument("--ledger", help="SQLite ledger (default MRLOAD_LEDGER_PATH) — fills Record IDs in the HubSpot import files")
     rev.set_defaults(func=cmd_review_export)
 
     props = sub.add_parser("properties", help="HubSpot property definitions for StackSync: ensure (gated) / verify + mapping sheet.")
@@ -455,6 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     dl.add_argument("--ledger")
     dl.add_argument("--pipeline", help="default pipeline id (or MRLOAD_DEAL_PIPELINE)")
     dl.add_argument("--dealstage", help="default dealstage id (or MRLOAD_DEAL_STAGE)")
+    dl.add_argument("--out-dir", help="where hubspot_deals_import.csv / hubspot_companies_import.csv are refreshed (default: the decisions file's folder)")
     dl.set_defaults(func=cmd_deals)
 
     args = parser.parse_args(argv)

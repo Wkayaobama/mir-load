@@ -28,8 +28,8 @@ that is valid. Every step is idempotent (`scripts/run_pass1.sh`), records a chec
 | 12 | `attach-upload` | LIVE `FILES_UPLOAD` | ledger `files_uploaded` all `uploaded` |
 | 13 | `attach-notes` | LIVE `FILE_NOTES_POST` | ledger `file_notes_posted` all `attached` |
 | 14 | `ledger-export` | LIVE `BQ_LOAD` | HubSpot ids visible in silver; StackSync syncs can be enabled |
-| 15 | `deals-dry` | | pass 2, one row per inferred deal (anchor) in `deal_decisions.csv`, only `approve=Y` rows |
-| 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery) |
+| 15 | `deals-dry` | | pass 2, one row per inferred deal in `deal_decisions.csv`, `approve=Y` rows; salvages orphan companies by name (search only); refreshes `hubspot_*_import.csv` |
+| 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery); or load the deals through the HubSpot Import wizard from `hubspot_deals_import.csv` |
 
 **Two surfaces, one rule.** This notebook and a Cloud Shell (or any terminal) run the same
 `scripts/run_pass1.sh`, so a step yields the same result on either. What is local to a clone is
@@ -223,7 +223,11 @@ Invoke-Step 'ledger-export'
 ### Pass 2 — only after you set `approve=Y` on rows of `.mrload/review/deal_decisions.csv`
 One row per **inferred deal**: a level-3 folder with a PDF beneath (outside the exhibition list), or a PO/Billing PDF
 directly under the company. `deals-live` creates the deal and associates every PO/Billing note beneath it; other
-documents are listed in `deal_documents.csv` for a later association. Reference: `docs/WALKER_DFS_AND_PATTERNS.md`.
+documents are listed in `deal_documents.csv` for a later association. An anchor whose company is a year-prefixed
+company folder (`2021_ELTA`) is salvaged by a HubSpot search on the remainder name (`ELTA`), never by creating it.
+Every deals run also refreshes `hubspot_deals_import.csv` and `hubspot_companies_import.csv` for the HubSpot Import
+wizard (pipeline and stage chosen there): companies file first, `deals-dry`, then the deals file with `Record ID` and
+`Company Record ID`. Reference: `docs/WALKER_DFS_AND_PATTERNS.md`, runbook §7.
 
 #!pwsh
 

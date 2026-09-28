@@ -1,4 +1,4 @@
-# e2e rehearsal record — 2026-09-13 (41 checks on branch walker-deal-depth3; 34 on the main working branch; first recorded 2026-09-07 with 28)
+# e2e rehearsal record — 2026-09-13 (48 checks on branch pass2-orphan-salvage; 41 after the deal layer; first recorded 2026-09-07 with 28)
 
 Produced by `scripts/e2e_rehearsal.sh` in the development container (no Google
 or HubSpot credentials available there, see `docs/RUNBOOK_PASS1.md` →
@@ -6,25 +6,25 @@ Rehearsal). Real code paths against local stand-ins; wall time ≈ 31 s.
 
 ## Clean scenario — full sequence steps 0 → 7 (+ hs-props before dbt, hs-props-verify after)
 
-# mr-load e2e rehearsal — 41/41 checks passed
+# mr-load e2e rehearsal — 48/48 checks passed
 
 Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot client → HubSpot mock · `bq` stub with schema validation · real dbt models + tests on DuckDB · SQLite ledger.
 
 | # | check | result | detail |
 |---|---|---|---|
-| 1 | walk: tradeshow subtree pruned | PASS | 42 nodes |
+| 1 | walk: tradeshow subtree pruned | PASS | 50 nodes |
 | 2 | walk: 7 company folders (6 Quantum + 1 Photonics) | PASS | 7 |
-| 3 | walk: 5 deal candidates (PO/Billing PDFs, case-insensitive, any depth) | PASS | IQM Billing Q2.PDF, PO_4711 Thorlabs.pdf, Billing-2026-03.pdf, PO 2026-042.pdf, Toshiba PO 2026-001.pdf |
+| 3 | walk: 7 deal candidates (PO/Billing PDFs, case-insensitive, any depth) | PASS | PO ELTA-7.pdf, PO AS-1.pdf, IQM Billing Q2.PDF, PO_4711 Thorlabs.pdf, Billing-2026-03.pdf, PO 2026-042.pdf, Toshiba PO 2026-001.pdf |
 | 4 | walk: deal_node_key = self on the level-3 folder, inherited by the level-4 file, absent directly under the company | PASS |  |
 | 5 | walk: shortcut classified and excluded from attach | PASS |  |
 | 6 | walk: orphan at segment level has no company anchor | PASS |  |
 | 7 | walk: no multi-parent / duplicate keys (clean scenario) | PASS |  |
-| 8 | walk: every attachable file anchors to an existing company folder | PASS | 26 attachable |
+| 8 | walk: 4 files under year-prefixed company-level folders (2021_ELTA, 2022_Aselsan) are self-anchored to a non-company row: not attached, not indexed, salvaged in pass 2 | PASS | 4 |
 | 9 | bq: library_hierarchy load validated positionally + by type, row count == CSV | PASS | errors=[] |
 | 10 | bq: 4 ledger tables loaded (step 6) | PASS |  |
-| 11 | dbt gate: 49 tests, 0 fail/error | PASS | {'pass': 48, 'warn': 1, 'fail': 0, 'error': 0} |
-| 12 | dbt gate: orphan check surfaces as WARN (not STOP) | PASS | {'pass': 48, 'warn': 1, 'fail': 0, 'error': 0} |
-| 13 | companies: Thorlabs matched by name (pre-existing), 6 created | PASS | {'created': 6, 'matched_by_name': 1} |
+| 11 | dbt gate: 49 tests, 0 fail/error | PASS | {'pass': 47, 'warn': 2, 'fail': 0, 'error': 0} |
+| 12 | dbt gate: orphan check surfaces as WARN (not STOP) | PASS | {'pass': 47, 'warn': 2, 'fail': 0, 'error': 0} |
+| 13 | companies: Thorlabs matched by name (pre-existing), 6 created | PASS | {'created': 6, 'matched_by_name': 1, 'matched_by_name_pass2': 1, 'not_in_portal_pass2': 1} |
 | 14 | companies: every ledger hs_company_id exists in HubSpot | PASS |  |
 | 15 | attach p1: 26 files uploaded, none failed | PASS | {'uploaded': 26} |
 | 16 | attach p1: 429 retried once (uploads requested == files + 1) | PASS | requests=27 files=26 |
@@ -42,20 +42,27 @@ Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot c
 | 28 | deal: the RFQ folder qualifies with pdf=2, PO/Billing=1, files=4; Submissions qualifies via its Billing PDF | PASS |  |
 | 29 | deal: exhibition folder (excluded realm) and PDF-less 'Site survey' are NOT deals | PASS |  |
 | 30 | deal: legacy_deal_id set on the 6 files beneath the two folder anchors + the 3 self-anchored PDFs, NULL elsewhere | PASS | 9 |
-| 31 | deal: Python qualifier (review/deal_anchors.csv) agrees with the dbt model, name by name | PASS | 5 |
-| 32 | deal: 4 deferred documents beneath anchors (quote, SOW, gds x2) listed in review/deal_documents.csv, none of them PO/Billing | PASS | 4 |
+| 31 | deal: Python qualifier agrees with the dbt model for company-folder anchors; the two orphan anchors (Tender, RFP) exist only on the Python side | PASS | 7 |
+| 32 | deal: 6 deferred documents beneath anchors (quotes, SOW, gds x2, offer) listed in review/deal_documents.csv, none of them PO/Billing | PASS | 6 |
 | 33 | silver: hs_note_id populated for every index row after ledger-export | PASS | 26/26 |
 | 34 | silver: hs_company_id populated for all 7 companies | PASS | 7 |
 | 35 | silver: orphans model holds the segment-level spreadsheet | PASS | 1 |
-| 36 | pass 2: 5 deals created from approved decisions (one per inferred anchor, not per PDF) | PASS | {'created': 5} |
-| 37 | pass 2: 5 deal→company associations; 5 note→deal (only the PO/Billing notes; the quote and SOW deferred) | PASS | 5/5 |
-| 38 | pass 2: hs_deal_id visible on all 5 deal-candidate files through their anchor | PASS | 5 |
-| 39 | checkpoints: every step run recorded rc=0, in the executed order | PASS | preflight walk bq-init bq-load hs-props hs-props dbt hs-props-verify review companies-dry companies-live attach-dry attach-upload attach-notes attach-notes ledger-export deals-dry deals-live ledger-export |
-| 40 | pipeline_state: all 16 steps done, next = none (pass 1 + pass 2 complete, deal ids written back) | PASS | next=None pass 1 complete |
-| 41 | dbt final build after write-back: 49 tests, 0 fail/error | PASS | {'pass': 48, 'warn': 1, 'fail': 0, 'error': 0} |
+| 36 | pass 2: 6 deals created from 7 approved anchors (one per anchor, not per PDF; Aselsan's has no company) | PASS | {'created': 6} |
+| 37 | pass 2: 6 deal→company associations; 5 note→deal (PO/Billing notes only; ELTA's PO was never attached — strict pass 1) | PASS | 6/5 |
+| 38 | pass 2: hs_deal_id visible on the 5 indexed deal-candidate files through their anchor | PASS | 5 |
+| 39 | salvage: ELTA (year-prefixed company folder) found by name in the portal → ledger matched_by_name_pass2 → its deal associated to company 9002, with 0 notes | PASS | ('30 Sales|20 opportunities and customer data|Quantum|2021_ELTA', 'ELTA', '9002', 'matched_by_name_pass2') |
+| 40 | salvage: Aselsan not in the portal → ledger not_in_portal_pass2 (null id), no deal created, nothing created in HubSpot for it | PASS | ('30 Sales|20 opportunities and customer data|Quantum|2022_Aselsan', 'Aselsan', None, 'not_in_portal_pass2') |
+| 41 | strict pass 1: an attach dry run after the salvage still lists only the company-folder files (ELTA's files stay unattached) | PASS | 26 vs 26 |
+| 42 | import: hubspot_deals_import.csv has one row per inferred anchor (7), header == the card-derived column set | PASS | 7 |
+| 43 | import: Record ID filled from the ledger on the 6 API-created deals, blank on the Aselsan row; Pipeline / Deal Stage blank everywhere | PASS |  |
+| 44 | import: Company Record ID filled on 6 rows (incl. ELTA → 9002); company status resolved×5 / salvaged×1 / missing_in_portal×1 | PASS |  |
+| 45 | import: hubspot_companies_import.csv lists exactly the confirmed-missing company (Aselsan) with its Drive folder link | PASS | [{'Company name': 'Aselsan', 'Company Domain Name': '', 'Description': 'Drive folder: https://drive.google.com/drive/folders/m0502022Aselsan', 'mrload_company_node_key': '30 Sales|20 opportunities and customer data|Quantum|2022_Aselsan', 'mrload_legacy_company_id': '3020Q-4164510e', 'mrload_segment': 'Quantum', 'mrload_drive_folder_id': 'm0502022Aselsan', 'mrload_drive_link': 'https://drive.google.com/drive/folders/m0502022Aselsan', 'mrload_asset_count': '2', 'mrload_deal_candidate_count': '1', 'mrload_parked_count': '1', 'mrload_drive_modified_at': '2026-06-15T10:30:00.000Z', 'mrload_resolution_status': ''}] |
+| 46 | checkpoints: every step run recorded rc=0, in the executed order | PASS | preflight walk bq-init bq-load hs-props hs-props dbt hs-props-verify review companies-dry companies-live attach-dry attach-upload attach-notes attach-notes ledger-export deals-dry deals-live ledger-export |
+| 47 | pipeline_state: all 16 steps done, next = none (pass 1 + pass 2 complete, deal ids written back) | PASS | next=None pass 1 complete |
+| 48 | dbt final build after write-back: 49 tests, 0 fail/error | PASS | {'pass': 47, 'warn': 2, 'fail': 0, 'error': 0} |
 
 Ledger at the end: companies_resolved created=6 / matched_by_name=1 ·
-files_uploaded uploaded=26 · file_notes_posted attached=26 · deals_created created=5 (one per inferred anchor).
+files_uploaded uploaded=26 · file_notes_posted attached=26 · deals_created created=6 (one per inferred anchor; Aselsan's anchor has no company in the portal) · companies_resolved matched_by_name_pass2=1 (ELTA) / not_in_portal_pass2=1 (Aselsan).
 
 ## Dirty scenario — the cardinality gate must stop the run
 

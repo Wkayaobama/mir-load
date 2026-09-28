@@ -6,7 +6,8 @@ import csv
 from pathlib import Path
 
 from pipeline.library_files.card import load_library_card
-from pipeline.library_files.deal_anchors import deal_anchor_key_for_row, deal_documents, qualify_deal_anchors
+from pipeline.library_files.deal_anchors import (company_display_name, company_rows_for_anchors, deal_anchor_key_for_row,
+                                                  deal_documents, qualify_deal_anchors)
 from pipeline.library_files.deals import DECISION_COLUMNS, write_decisions_template
 from pipeline.library_files.hierarchy import HierarchyWriter, read_hierarchy_csv
 from pipeline.library_files.manifest import ManifestEntry
@@ -106,3 +107,24 @@ def test_decisions_template_one_row_per_anchor(tmp_path):
     assert rfq["dealname"] == "Toshiba - 2026 Quantum sensor RFQ" and rfq["approve"] == "N" and rfq["pdf_count"] == "2"
     po = next(g for g in got if g["anchor_kind"] == "file")
     assert po["dealname"] == "Toshiba - Toshiba PO 2026-001"
+
+
+def test_company_display_name_uses_the_remainder_for_a_year_prefixed_company_folder(tmp_path):
+    rows = _rows(tmp_path)
+    by = {r["rel_path"]: r for r in rows}
+    assert company_display_name(by["Quantum/2021_ELTA"]) == "ELTA"
+    assert company_display_name(by["Quantum/Toshiba"]) == "Toshiba"
+    assert company_display_name(None) == ""
+    anchors = qualify_deal_anchors(rows, load_library_card())
+    co = company_rows_for_anchors(rows, anchors)
+    tender = next(a for a in anchors.values() if a.deal_name == "Tender")
+    rfq = next(a for a in anchors.values() if a.deal_name == "2026 Quantum sensor RFQ")
+    assert co[tender.company_node_key]["node_name"] == "2021_ELTA" and co[rfq.company_node_key]["node_name"] == "Toshiba"
+
+
+def test_decisions_template_names_salvage_companies_by_the_remainder(tmp_path):
+    rows = _rows(tmp_path)
+    out = tmp_path / "deal_decisions.csv"
+    write_decisions_template(rows, out, card=load_library_card())
+    got = {g["deal_name"]: g for g in csv.DictReader(out.open(encoding="utf-8"))}
+    assert got["Tender"]["company_name"] == "ELTA" and got["Tender"]["dealname"] == "ELTA - Tender"

@@ -112,3 +112,13 @@ def test_upload_phase_reports_missing_source(tmp_path: Path):
     out = up.upload_phase([row], live=True)
     assert out[0]["status"] == "failed" and out[0]["error"] == "file_not_found"
     assert out[0]["status"] != STATUS_UPLOADED
+
+
+def test_company_map_hides_pass2_salvage_rows_by_default(tmp_path: Path):
+    ledger = SqliteLedger(tmp_path / "l.sqlite"); ledger.bootstrap()
+    ledger.record_company({"company_node_key": "K|Q|Toshiba", "company_name": "Toshiba", "hs_company_id": "1", "status": "created"})
+    ledger.record_company({"company_node_key": "K|Q|2021_ELTA", "company_name": "ELTA", "hs_company_id": "2", "status": "matched_by_name_pass2"})
+    ledger.record_company({"company_node_key": "K|Q|2022_Aselsan", "company_name": "Aselsan", "hs_company_id": None, "status": "not_in_portal_pass2"})
+    assert ledger.company_map() == {"K|Q|Toshiba": "1"}                                   # pass 1 (attach) scope
+    assert ledger.company_map(include_pass2=True) == {"K|Q|Toshiba": "1", "K|Q|2021_ELTA": "2"}   # pass 2 scope
+    assert set(ledger.company_rows()) == {"K|Q|Toshiba", "K|Q|2021_ELTA", "K|Q|2022_Aselsan"}

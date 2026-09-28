@@ -32,10 +32,12 @@ class LedgerLike(Protocol):
     def record_attach(self, entry: Mapping[str, object]) -> None: ...
     def load_attached_rows(self) -> list[dict]: ...
     def record_unattach(self, legacy_id: str, status: str, error: str | None) -> None: ...
-    def company_map(self) -> dict[str, str]: ...
+    def company_map(self, *, include_pass2: bool = False) -> dict[str, str]: ...
+    def company_rows(self) -> dict[str, dict]: ...
     def record_company(self, entry: Mapping[str, object]) -> None: ...
     def note_map(self) -> dict[str, str]: ...
     def deal_map(self) -> dict[str, str]: ...
+    def deal_rows(self) -> dict[str, dict]: ...
     def record_deal(self, entry: Mapping[str, object]) -> None: ...
 
 
@@ -189,13 +191,24 @@ class SqliteLedger:
 
     # -- companies -----------------------------------------------------------
 
-    def company_map(self) -> dict[str, str]:
+    def company_map(self, *, include_pass2: bool = False) -> dict[str, str]:
+        """company_node_key → hs_company_id. Pass-1 rows only by default: companies recorded by the pass-2
+        salvage (status ``*_pass2``) are visible to pass 2 alone (include_pass2=True), so attach keeps
+        exactly its pre-salvage scope — strict pass 1."""
+        sql = ("SELECT company_node_key, hs_company_id FROM companies_resolved "
+               "WHERE hs_company_id IS NOT NULL")
+        if not include_pass2:
+            sql += " AND substr(status, -6) <> '_pass2'"
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT company_node_key, hs_company_id FROM companies_resolved "
-                "WHERE hs_company_id IS NOT NULL"
-            ).fetchall()
+            rows = conn.execute(sql).fetchall()
         return {r[0]: r[1] for r in rows}
+
+    def company_rows(self) -> dict[str, dict]:
+        """Every companies_resolved row (null ids included) keyed by company_node_key — for the import files."""
+        cols = ("company_node_key", "company_name", "hs_company_id", "status", "error", "resolved_at")
+        with self._connect() as conn:
+            rows = conn.execute(f"SELECT {', '.join(cols)} FROM companies_resolved").fetchall()
+        return {r[0]: dict(zip(cols, r)) for r in rows}
 
     def record_company(self, entry: Mapping[str, object]) -> None:
         with self._connect() as conn:
@@ -231,6 +244,13 @@ class SqliteLedger:
                 "SELECT legacy_library_id, hs_deal_id FROM deals_created WHERE hs_deal_id IS NOT NULL"
             ).fetchall()
         return {r[0]: r[1] for r in rows}
+
+    def deal_rows(self) -> dict[str, dict]:
+        """Every deals_created row (failed included) keyed by legacy_library_id — for the import files."""
+        cols = ("legacy_library_id", "hs_deal_id", "dealname", "hs_company_id", "hs_note_id", "status", "error", "resolved_at")
+        with self._connect() as conn:
+            rows = conn.execute(f"SELECT {', '.join(cols)} FROM deals_created").fetchall()
+        return {r[0]: dict(zip(cols, r)) for r in rows}
 
     def record_deal(self, entry: Mapping[str, object]) -> None:
         with self._connect() as conn:

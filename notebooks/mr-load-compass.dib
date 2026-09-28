@@ -648,7 +648,9 @@ Invoke-Ubuntu 'scripts/run_pass1.sh status'
 # 7 · Pass 2 — deals from PO / Billing PDFs (only after you edited the decisions file)
 
 Edit `.mrload/review/deal_decisions.csv` (VS Code, Rainbow CSV): one row per inferred deal (level-3 folder with a PDF
-beneath, or a PO/Billing PDF directly under the company); approve per row, amounts, pipeline/stage overrides. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
+beneath, or a PO/Billing PDF directly under the company); approve per row, amounts, pipeline/stage overrides.
+Orphan companies (year-prefixed company folders) are salvaged by a name search, never created; the same run
+refreshes `hubspot_deals_import.csv` / `hubspot_companies_import.csv` for the HubSpot Import wizard. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
 
 #!pwsh
 
@@ -666,7 +668,7 @@ Invoke-Ubuntu 'scripts/run_pass1.sh deals-live' -Live
 - **unit tests**: the walker, card, hierarchy writer, ledger, uploader, companies, deals.
 - **e2e rehearsal (clean)**: the real code against local stand-ins — a Drive v3 mock, a HubSpot
   mock that returns one 429, a `bq` stub that validates schema/types, dbt on DuckDB — driving
-  `scripts/run_pass1.sh` step by step. Expected: `28/28 checks` in `.mrload/rehearsal/REPORT.md`.
+  `scripts/run_pass1.sh` step by step. Expected: `48/48 checks` in `.mrload/rehearsal/REPORT.md`.
 - **e2e rehearsal (dirty)**: a broken tree; expected outcome is a **stop at the dbt gate** with
   zero HubSpot writes — that is the contract working.
 

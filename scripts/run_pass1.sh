@@ -259,7 +259,7 @@ step_hs_props_verify() {
 step_review() {
   say "review — operator queues (offline)"
   [[ -f "$HIER" ]] || die "run 'walk' first"
-  logrun review $RUNNER review-export --hierarchy "$HIER" --out-dir "$REVIEW"
+  logrun review $RUNNER review-export --hierarchy "$HIER" --out-dir "$REVIEW" --ledger "$LEDGER"
   echo
   echo "   OPERATOR: open $REVIEW/"
   echo "     companies.csv          → the company objects that will be searched/created (names = folder names)"
@@ -270,6 +270,25 @@ step_review() {
   echo "     deal_anchors.csv       → inferred deals: qualified level-3 folders (PDF beneath, not exhibition-shaped) + self-anchored PO/Billing PDFs"
   echo "     deal_documents.csv     → files beneath an inferred deal that pass 2 does NOT associate yet (notes API later)"
   echo "     deal_decisions.csv     → ONE ROW PER INFERRED DEAL: edit approve=Y, dealname, pipeline, dealstage, amount for pass 2"
+  echo "     hubspot_deals_import.csv     → HubSpot Import tool: one row per inferred deal + company association (Record IDs from the ledger)"
+  echo "     hubspot_companies_import.csv → companies referenced by deals and confirmed missing in the portal (import FIRST, then deals-dry, then deals)"
+}
+deals_summary() {  # deals_summary <json> <review dir>
+  $PY - "$1" "$2" <<'EOF'
+import json, sys, collections
+d = json.load(open(sys.argv[1])); review = sys.argv[2]
+print(dict(collections.Counter(r["status"] for r in d)))
+for r in d:
+    if r["status"] in ("failed", "partial", "no_company_resolved"):
+        print(f"  !! {(r.get('dealname') or r['legacy_library_id'])[:44]:<44} {r['status']:<20} {(r.get('company_status') or ''):<18} {(r.get('error') or '')[:150]}")
+miss = sum(1 for r in d if r.get("company_status") == "missing_in_portal")
+if miss:
+    print(f"  → {miss} deal(s) whose company is not in the portal: import {review}/hubspot_companies_import.csv (Companies),")
+    print(f"    re-run deals-dry (the salvage then finds them), then import {review}/hubspot_deals_import.csv (Deals + Companies by Record ID)")
+if any("create_error" in (r.get("error") or "") for r in d):
+    print("  → create_error: HubSpot refused the deal — a dealstage/pipeline value must be the STAGE/PIPELINE ID of THIS portal (GET /crm/v3/pipelines/deals)")
+EOF
+  echo "   Import-ready files (refreshed by every deals run): $2/hubspot_deals_import.csv · $2/hubspot_companies_import.csv"
 }
 
 step_companies_dry() {
@@ -338,8 +357,10 @@ step_deals_dry() {
   say "7/deals-dry — pass 2 from $REVIEW/deal_decisions.csv (approve=Y rows only; one deal per inferred anchor)"
   [[ -f "$REVIEW/deal_decisions.csv" ]] || die "run 'review' and edit deal_decisions.csv first"
   logrun deals-dry $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --hierarchy "$HIER" --ledger "$LEDGER" >"$STATE/deals_dry.json" || true
-  $PY -c "import json,collections;d=json.load(open('$STATE/deals_dry.json'));print(dict(collections.Counter(r['status'] for r in d)))"
-  echo "   OPERATOR: would_create = approved rows with dealname+dealstage; no_company_resolved = run companies-live first;"
+  deals_summary "$STATE/deals_dry.json" "$REVIEW"
+  echo "   OPERATOR: would_create = approved rows with dealname+dealstage; no_company_resolved = company not in the ledger:"
+  echo "   a company folder → run companies-live; a year-prefixed company folder (e.g. 2021_ELTA) → the pass-2 salvage searched"
+  echo "   HubSpot by its name (recorded in the ledger, dry run included) and found nothing → import hubspot_companies_import.csv."
   echo "   set MRLOAD_DEAL_PIPELINE / MRLOAD_DEAL_STAGE (portal ids) or fill them per row."
 }
 
@@ -349,6 +370,7 @@ step_deals_live() {
   confirm "Create $n deals, associate deal → company and note → deal?"
   MRLOAD_APPROVE_DEAL_CREATE=1 logrun deals-live $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --hierarchy "$HIER" --ledger "$LEDGER" >"$STATE/deals_live.json" || true
   ledger_sql "select status, count(*) from deals_created group by status"
+  deals_summary "$STATE/deals_live.json" "$REVIEW"
   echo "   Then re-run: scripts/run_pass1.sh ledger-export   (hs_deal_id → silver_library_deal_candidates)"
 }
 
