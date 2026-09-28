@@ -116,6 +116,8 @@ review-export  operator queues + deal_anchors.csv / deal_documents.csv + deal_de
 companies      company folder → HubSpot company (search by name, create)     [MRLOAD_APPROVE_COMPANY_CREATE]
 attach         download on demand → POST files → note → associate to company [MRLOAD_APPROVE_FILES_UPLOAD, MRLOAD_APPROVE_FILE_NOTES_POST]
 ledger-export  ledger → mrload_raw.{companies_resolved,files_uploaded,file_notes_posted,deals_created} → dbt build
+               + hubspot_*_import.csv regenerated (ledger + deal_decisions.csv) → mrload_raw.hubspot_deals_import / hubspot_companies_import
+               (snake_case columns, CSV order; console export → HubSpot Import wizard from any surface)
 deals          pass 2: one deal per approved ANCHOR → company; every PO/Billing note beneath → deal  [MRLOAD_APPROVE_DEAL_CREATE]
                orphan salvage: a year-prefixed company folder's deal is associated to the company found by name (never created);
                every run refreshes hubspot_deals_import.csv / hubspot_companies_import.csv

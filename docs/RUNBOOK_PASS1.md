@@ -301,6 +301,25 @@ hs_note_id / attach_status` and `silver_library_deal_candidates.hs_deal_id` are
 populated — the join keys the associativity layer needs. Re-run after every
 live HubSpot step to keep BigQuery current.
 
+The same run also **materialises the two HubSpot Import files as BigQuery tables**,
+`mrload_raw.hubspot_deals_import` and `mrload_raw.hubspot_companies_import` (surface
+parity: Cloud Shell, the notebooks and WezTerm all read them from BigQuery instead of a
+local CSV). They are regenerated first, from the ledger's persisted statuses plus
+`review/deal_decisions.csv` when it exists, into `.mrload/review/`, then loaded with a
+card-derived schema written to `.mrload/ledger_export/<table>.schema.json`: one NULLABLE
+column per CSV column, in CSV order, **snake_case** names — the head columns carry the
+HubSpot internal names (`hs_object_id`, `dealname`, `pipeline`, `dealstage`, `amount`,
+`description`, `company_hs_object_id`, `company_name`; companies: `name`, `domain`,
+`description`), the card properties keep their `mrload_*` names (counts → INT64,
+`mrload_drive_modified_at` → TIMESTAMP), and the four bookkeeping columns become
+`op_approve`, `op_company_status`, `op_api_status`, `op_api_error`. Before `walk` has run
+the import tables are skipped with a note; `--tables-only` (used by the rehearsal) exports
+the ledger tables alone. The ledger tables load first, so a failed import-table load is
+reported per table and stops the step before `dbt build`. Because only *persisted* results
+are known here, a `deals-dry` outcome such as `would_create` does not show in these tables:
+`deals-dry` stays the authoritative pre-flight view, and `dealname` / `amount` edits belong
+in `deal_decisions.csv` — the import files and tables are generated, never edited.
+
 ## 7. `deals-dry` / `deals-live` — pass 2  [gate MRLOAD_APPROVE_DEAL_CREATE]
 
 **Unit of work: the inferred deal, not the PDF** (side branch `walker-deal-depth3`; the
@@ -316,7 +335,8 @@ inference is documented in `docs/WALKER_DFS_AND_PATTERNS.md` §6). `review` writ
   `<company> - <anchor name>`; fill `pipeline`, `dealstage` (portal ids; or set
   `MRLOAD_DEAL_PIPELINE` / `MRLOAD_DEAL_STAGE`) and `amount`.
 - `hubspot_deals_import.csv` / `hubspot_companies_import.csv` — the **HubSpot Import** files, written
-  by `review` (ids from the ledger when it exists) and refreshed by every `deals-dry` / `deals-live`.
+  by `review` (ids from the ledger when it exists), refreshed by every `deals-dry` / `deals-live`, and
+  loaded into BigQuery by `ledger-export` (`mrload_raw.hubspot_deals_import` / `_companies_import`).
   See *Import path* below.
 
 **Orphan salvage (pass-2 enrichment).** An anchor whose company node is a self-anchored
@@ -363,7 +383,29 @@ created), then four `(mr-load)` bookkeeping columns. Order, which is load-bearin
 Edit the CSV as text (Excel turns Record IDs into scientific notation); skip
 `mrload_drive_modified_at` if the wizard rejects the ISO timestamp. `review` overwrites
 `deal_decisions.csv`, so `deals-dry` is the authoritative refresh of the import files. `partial` = deal created, one association
-failed; re-run converges. To change the heuristic (minimum PDFs, excluded names) edit
+failed; re-run converges.
+
+**Import path from any surface (BigQuery console, no local file).** After `ledger-export`
+the same two files exist as `mrload_raw.hubspot_deals_import` / `hubspot_companies_import`,
+so a Cloud Shell run needs no file transfer. In the BigQuery console:
+
+```sql
+SELECT * EXCEPT(pipeline, dealstage, op_company_status, op_api_status, op_api_error)
+FROM `wisekeybq.mrload_raw.hubspot_deals_import`
+WHERE op_approve = 'Y'
+ORDER BY company_name, dealname
+```
+
+→ *Save results* → Google Sheets or CSV (local file) → HubSpot **Import**, one file, Deals +
+Companies. Leaving the blank `pipeline` / `dealstage` columns out makes the wizard ask for a
+default pipeline and stage instead of failing on blanks; the `op_approve` filter exports only
+the rows you approved in `deal_decisions.csv`. Mapping (the wizard remembers headers, and the
+HubSpot internal names auto-match): `hs_object_id` → Deals · Record ID (blank = create, filled
+= update), `company_hs_object_id` → Companies · Record ID (the association),
+`dealname` / `amount` / `description` / `mrload_*` auto-match, `company_name` → *Don't import*.
+Companies first when `hubspot_companies_import` has rows (`SELECT name, domain, description,
+mrload_* …`), then `deals-dry` again so `company_hs_object_id` fills. Import the downloaded
+file as is (do not round-trip it through Excel). Steps 1–4 above apply unchanged. To change the heuristic (minimum PDFs, excluded names) edit
 `context/cards/library.yaml` → `deal_inference` and the matching dbt vars, then `dbt` and
 `review` again — no re-walk.
 
@@ -417,10 +459,11 @@ through HubSpot itself (listing, name search) and are safe from any surface.
 .mrload/library_hierarchy.csv   bronze (walk output)          .mrload/ledger.sqlite   idempotency + HubSpot ids
 .mrload/silver_preview.csv      offline 19-col parity          .mrload/cache/          downloaded binaries (disposable)
 .mrload/review/*.csv            your queues + deal decisions   .mrload/logs/           one log per step run
-.mrload/ledger_export/*.csv     step-6 CSVs loaded into BigQuery
+.mrload/ledger_export/*.csv     step-6 CSVs loaded into BigQuery; hubspot_*_import.schema.json = card-derived schemas of the import tables
 .mrload/checkpoints.tsv         one line per step run (ts, step, rc, message) — read by scripts/dev/pipeline_state.sh
 .mrload/review/deal_anchors.csv / deal_documents.csv   inferred deals and their deferred documents (side branch)
-.mrload/review/hubspot_deals_import.csv / hubspot_companies_import.csv   HubSpot Import files (review writes, deals refreshes)
+.mrload/review/hubspot_deals_import.csv / hubspot_companies_import.csv   HubSpot Import files (review writes, deals refreshes,
+                                                                          ledger-export regenerates + loads as mrload_raw.hubspot_*_import)
 ```
 
 **Where am I / what is next.** `scripts/dev/pipeline_state.sh` (Task *mr-load: pipeline

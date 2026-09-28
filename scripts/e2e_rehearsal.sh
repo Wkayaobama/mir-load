@@ -34,7 +34,7 @@ snap() { curl -s "http://127.0.0.1:$P2/__state" >"$R/$1.json"; }
 
 $RUN preflight
 $RUN walk
-$RUNNER ledger-export --ledger "$MRLOAD_LEDGER_PATH" --out-dir "$R/ledger_export" --dataset mrload_raw >/dev/null   # header-only CSVs for the DuckDB sources
+$RUNNER ledger-export --ledger "$MRLOAD_LEDGER_PATH" --out-dir "$R/ledger_export" --dataset mrload_raw --tables-only >/dev/null   # header-only ledger CSVs for the DuckDB sources
 $RUN bq-init
 $RUN bq-load
 $RUN hs-props;        snap hs_after_props

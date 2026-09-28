@@ -344,13 +344,20 @@ step_attach_notes() {
 }
 
 step_ledger_export() {
-  say "6/ledger-export — HubSpot ids → BigQuery (mrload_raw.*) → dbt build"
-  $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS"
-  confirm "Load the 4 ledger tables into $RAW_DS and rebuild silver?"
-  MRLOAD_APPROVE_BQ_LOAD=1 logrun ledger-export $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS"
+  say "6/ledger-export — HubSpot ids → BigQuery (mrload_raw.*) + HubSpot import tables → dbt build"
+  $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS" --hierarchy "$HIER" --review-dir "$REVIEW"
+  confirm "Load the 4 ledger tables + 2 HubSpot import tables into $RAW_DS and rebuild silver?"
+  MRLOAD_APPROVE_BQ_LOAD=1 logrun ledger-export $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS" --hierarchy "$HIER" --review-dir "$REVIEW"
   ( cd dbt && logrun dbt-build dbt build --profiles-dir . --target "$DBT_TARGET" )
   echo "   Result: silver_library_company.hs_company_id, silver_library_index.hs_file_id/hs_note_id now populated"
   echo "   → the associativity layer can join on them."
+  echo "   HubSpot Import from any surface (BigQuery console, no local file needed) — regenerated from ledger + deal_decisions.csv:"
+  echo "     SELECT * EXCEPT(pipeline, dealstage, op_company_status, op_api_status, op_api_error)"
+  echo "     FROM \`${MRLOAD_BQ_PROJECT:-<project>}.${RAW_DS}.hubspot_deals_import\` WHERE op_approve = 'Y' ORDER BY company_name, dealname"
+  echo "     → Save results → Google Sheets or CSV → HubSpot Import (one file, Deals + Companies); pick pipeline + stage when prompted."
+  echo "     Map once: hs_object_id → Deals·Record ID (blank = create, filled = update); company_hs_object_id → Companies·Record ID"
+  echo "     (the association); dealname / amount / description / mrload_* auto-match; company_name → Don't import."
+  echo "     Companies first when ${RAW_DS}.hubspot_companies_import has rows (name / domain / description), then re-run deals-dry."
 }
 
 step_deals_dry() {

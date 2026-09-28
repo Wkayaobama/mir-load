@@ -15,10 +15,16 @@ Whatever the ledger state or the order steps were run in, the operator gets:
 
 `review` writes both offline (ids from the ledger when it exists); `deals-dry` / `deals-live` rewrite them
 with this run's results overlaid on the ledger.
+
+`ledger-export` regenerates them from the ledger + the decisions file and loads them into BigQuery as
+``mrload_raw.hubspot_deals_import`` / ``mrload_raw.hubspot_companies_import`` (snake_case columns, CSV order),
+so every execution surface reads the same tables: BigQuery console → Save results → HubSpot Import wizard.
 """
 from __future__ import annotations
 
 import csv
+import json
+import re
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -33,6 +39,22 @@ DEAL_HEAD = ["Record ID", "Deal Name", "Pipeline", "Deal Stage", "Amount", "Deal
 # bookkeeping for the operator, labelled so they cannot be mistaken for HubSpot properties (map to "Don't import")
 DEAL_TAIL = ["Approve (mr-load)", "Company status (mr-load)", "API status (mr-load)", "API error (mr-load)"]
 COMPANY_HEAD = ["Company name", "Company Domain Name", "Description"]
+
+# BigQuery materialisation (ledger-export): same rows, snake_case column names, CSV header order (bq load is positional).
+# Head columns take the HubSpot INTERNAL property names — the import wizard auto-matches them from a console export;
+# bookkeeping columns get an `op_` prefix so they can never be mistaken for the `mrload_*` properties hs-props created.
+DEALS_IMPORT_TABLE = "hubspot_deals_import"
+COMPANIES_IMPORT_TABLE = "hubspot_companies_import"
+BQ_NAME_RX = re.compile(r"^[a-z_][a-z0-9_]*$")
+BQ_COLUMN_NAMES = {
+    "Record ID": "hs_object_id", "Deal Name": "dealname", "Pipeline": "pipeline", "Deal Stage": "dealstage",
+    "Amount": "amount", "Deal Description": "description", "Company Record ID": "company_hs_object_id",
+    "Company Name": "company_name",
+    "Company name": "name", "Company Domain Name": "domain", "Description": "description",
+    "Approve (mr-load)": "op_approve", "Company status (mr-load)": "op_company_status",
+    "API status (mr-load)": "op_api_status", "API error (mr-load)": "op_api_error",
+}
+_BQ_TYPES = {"number": "INT64", "datetime": "TIMESTAMP", "date": "TIMESTAMP"}   # every card `number` is a count
 
 
 def _plan_fields(card: LibraryCard, object_type: str) -> list[PropertySpec]:
@@ -52,6 +74,44 @@ def deal_import_columns(card: LibraryCard) -> list[str]:
 
 def company_import_columns(card: LibraryCard) -> list[str]:
     return COMPANY_HEAD + [f.name for f in _plan_fields(card, "companies")]
+
+
+def bigquery_column_name(header: str) -> str:
+    """CSV header → BigQuery column: explicit map for the label headers, card names pass through, else sanitised."""
+    if header in BQ_COLUMN_NAMES:
+        return BQ_COLUMN_NAMES[header]
+    name = re.sub(r"[^a-z0-9]+", "_", header.lower()).strip("_") or "column"
+    return f"c_{name}" if name[0].isdigit() else name
+
+
+def _bq_type(spec: Optional[PropertySpec]) -> str:
+    return _BQ_TYPES.get(spec.type, "STRING") if spec is not None else "STRING"
+
+
+def import_table_schemas(card: LibraryCard) -> dict[str, list[dict]]:
+    """{table: bq schema} — one NULLABLE field per CSV column, in CSV header order (bq load maps by position)."""
+    out: dict[str, list[dict]] = {}
+    for table, object_type, columns in ((DEALS_IMPORT_TABLE, "deals", deal_import_columns(card)),
+                                        (COMPANIES_IMPORT_TABLE, "companies", company_import_columns(card))):
+        specs = {f.name: f for f in _plan_fields(card, object_type)}
+        schema = [{"name": bigquery_column_name(c), "type": _bq_type(specs.get(c)), "mode": "NULLABLE"} for c in columns]
+        names = [f["name"] for f in schema]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise ValueError(f"{table}: duplicate BigQuery column names {dupes} (rename the card field)")
+        out[table] = schema
+    return out
+
+
+def write_bigquery_schemas(out_dir: Path, card: LibraryCard) -> dict[str, Path]:
+    """<out_dir>/<table>.schema.json for both import tables (card-derived, generated at export time)."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, Path] = {}
+    for table, schema in import_table_schemas(card).items():
+        paths[table] = out_dir / f"{table}.schema.json"
+        paths[table].write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+    return paths
 
 
 def _is_file(r: dict) -> bool:

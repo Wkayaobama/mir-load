@@ -1,4 +1,4 @@
-# e2e rehearsal record — 2026-09-13 (48 checks on branch pass2-orphan-salvage; 41 after the deal layer; first recorded 2026-09-07 with 28)
+# e2e rehearsal record — 2026-09-28 (50 checks on branch pass2-orphan-salvage; 48 before the BigQuery import tables; 41 after the deal layer; first recorded 2026-09-07 with 28)
 
 Produced by `scripts/e2e_rehearsal.sh` in the development container (no Google
 or HubSpot credentials available there, see `docs/RUNBOOK_PASS1.md` →
@@ -6,7 +6,7 @@ Rehearsal). Real code paths against local stand-ins; wall time ≈ 31 s.
 
 ## Clean scenario — full sequence steps 0 → 7 (+ hs-props before dbt, hs-props-verify after)
 
-# mr-load e2e rehearsal — 48/48 checks passed
+# mr-load e2e rehearsal — 50/50 checks passed
 
 Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot client → HubSpot mock · `bq` stub with schema validation · real dbt models + tests on DuckDB · SQLite ledger.
 
@@ -57,9 +57,11 @@ Real code paths: `googleapiclient` walker → Drive mock · `requests` HubSpot c
 | 43 | import: Record ID filled from the ledger on the 6 API-created deals, blank on the Aselsan row; Pipeline / Deal Stage blank everywhere | PASS |  |
 | 44 | import: Company Record ID filled on 6 rows (incl. ELTA → 9002); company status resolved×5 / salvaged×1 / missing_in_portal×1 | PASS |  |
 | 45 | import: hubspot_companies_import.csv lists exactly the confirmed-missing company (Aselsan) with its Drive folder link | PASS | [{'Company name': 'Aselsan', 'Company Domain Name': '', 'Description': 'Drive folder: https://drive.google.com/drive/folders/m0502022Aselsan', 'mrload_company_node_key': '30 Sales|20 opportunities and customer data|Quantum|2022_Aselsan', 'mrload_legacy_company_id': '3020Q-4164510e', 'mrload_segment': 'Quantum', 'mrload_drive_folder_id': 'm0502022Aselsan', 'mrload_drive_link': 'https://drive.google.com/drive/folders/m0502022Aselsan', 'mrload_asset_count': '2', 'mrload_deal_candidate_count': '1', 'mrload_parked_count': '1', 'mrload_drive_modified_at': '2026-06-15T10:30:00.000Z', 'mrload_resolution_status': ''}] |
-| 46 | checkpoints: every step run recorded rc=0, in the executed order | PASS | preflight walk bq-init bq-load hs-props hs-props dbt hs-props-verify review companies-dry companies-live attach-dry attach-upload attach-notes attach-notes ledger-export deals-dry deals-live ledger-export |
-| 47 | pipeline_state: all 16 steps done, next = none (pass 1 + pass 2 complete, deal ids written back) | PASS | next=None pass 1 complete |
-| 48 | dbt final build after write-back: 49 tests, 0 fail/error | PASS | {'pass': 47, 'warn': 2, 'fail': 0, 'error': 0} |
+| 46 | bq: ledger-export loaded hubspot_deals_import (7 rows) + hubspot_companies_import (1 row) into mrload_raw with --replace, no load errors | PASS | 7/1 rows |
+| 47 | bq: the loaded deals table is byte-identical to review/hubspot_deals_import.csv; schema names = snake_case headers in CSV order (23, positional) | PASS | 23 columns, head ['hs_object_id', 'dealname'] |
+| 48 | checkpoints: every step run recorded rc=0, in the executed order | PASS | preflight walk bq-init bq-load hs-props hs-props dbt hs-props-verify review companies-dry companies-live attach-dry attach-upload attach-notes attach-notes ledger-export deals-dry deals-live ledger-export |
+| 49 | pipeline_state: all 16 steps done, next = none (pass 1 + pass 2 complete, deal ids written back) | PASS | next=None pass 1 complete |
+| 50 | dbt final build after write-back: 49 tests, 0 fail/error | PASS | {'pass': 47, 'warn': 2, 'fail': 0, 'error': 0} |
 
 Ledger at the end: companies_resolved created=6 / matched_by_name=1 ·
 files_uploaded uploaded=26 · file_notes_posted attached=26 · deals_created created=6 (one per inferred anchor; Aselsan's anchor has no company in the portal) · companies_resolved matched_by_name_pass2=1 (ELTA) / not_in_portal_pass2=1 (Aselsan).
@@ -90,7 +92,9 @@ contract accepted by a schema-validating `bq load`, the dbt models and all 34
 tests on a real SQL engine, company resolution (match vs create), the
 two-phase upload → note → association flow with retry and idempotent re-runs,
 the Library → Company N:1 cardinality end to end, step-6 write-back into
-silver, pass 2 from an approved decisions file, and the negative path.
+silver, the two HubSpot import tables materialised in `mrload_raw` by the same
+step (schema-validated positional load, byte-identical to the review files),
+pass 2 from an approved decisions file, and the negative path.
 
 Does not prove: Google / HubSpot authentication and quotas, the Drive
 sharing step, BigQuery-only SQL behaviour outside the shimmed functions, and

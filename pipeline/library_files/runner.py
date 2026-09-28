@@ -13,7 +13,9 @@ Sub-commands (pass 1, 30 Sales domain — see context/cards/library.yaml):
   review-export — Operator queues: deal candidates, parked PDFs, orphans, and
                the deal_decisions.csv template for pass 2.
   ledger-export — Step 6: dump the ledger tables to CSV and load them into
-               BigQuery so dbt can join the HubSpot ids into silver.
+               BigQuery so dbt can join the HubSpot ids into silver; also
+               materialises the two HubSpot-Import-ready files as
+               mrload_raw.hubspot_deals_import / hubspot_companies_import.
   deals      — Pass 2: create deals from the approved decisions file, associate
                deal → company and note → deal (MRLOAD_APPROVE_DEAL_CREATE).
 
@@ -32,11 +34,12 @@ from pathlib import Path
 from .card import DEFAULT_CARD_PATH, load_library_card
 from .companies import company_folders_from_hierarchy, resolve_companies
 from .deal_anchors import deal_documents, qualify_deal_anchors
-from .deals import read_decisions, resolve_deals, write_decisions_template
+from .deals import COMPANIES_IMPORT_FILE, DEALS_IMPORT_FILE, read_decisions, resolve_deals, write_decisions_template
 from .config import Settings
 from .drive_walker import ApiDriveLister, DriveFile, dfs_entries
 from .hierarchy import HierarchyWriter, read_hierarchy_csv
-from .hubspot_import import write_hubspot_import_files
+from .hubspot_import import (COMPANIES_IMPORT_TABLE, DEALS_IMPORT_TABLE, write_bigquery_schemas,
+                             write_hubspot_import_files)
 from .ledger import LEDGER_TABLES, SqliteLedger
 from .manifest import load_manifest
 from .properties import (OK_STATUSES, ensure_properties, load_catalog, load_property_plan, summarize,
@@ -351,21 +354,53 @@ def cmd_properties(args: argparse.Namespace) -> int:
     return 1 if any(r["status"] not in OK_STATUSES and r["status"] != "unknown_no_token" for r in rows) else 0
 
 
+def _bq_load_cmd(dataset: str, table: str, csv_path: Path, schema_path: Path) -> list[str]:
+    return ["bq", "load", "--source_format=CSV", "--skip_leading_rows=1", "--allow_quoted_newlines",
+            "--replace", f"{dataset}.{table}", str(csv_path), str(schema_path)]
+
+
+def _run_bq_load(cmd: list[str]) -> int:
+    """Print the command always (the dry run IS the plan); run it only behind the bq-load gate."""
+    print(" ".join(shlex.quote(c) for c in cmd))
+    if not _gate(APPROVE_BQ_LOAD_ENV):
+        return 0
+    rc = subprocess.run(cmd).returncode
+    print(f"loaded {cmd[-3]}: rc={rc}", file=sys.stderr)
+    return rc
+
+
 def cmd_ledger_export(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
-    _banner("ledger-export", [("bq load of ledger tables", APPROVE_BQ_LOAD_ENV)])
+    _banner("ledger-export", [("bq load of ledger + HubSpot import tables", APPROVE_BQ_LOAD_ENV)])
     ledger = _ledger(settings, args.ledger)
-    paths = ledger.export_tables(Path(args.out_dir))
+    out_dir = Path(args.out_dir)
+    paths = ledger.export_tables(out_dir)
     schema_dir = Path(__file__).parent / "sql" / "ledger"
     rc = 0
     for table in LEDGER_TABLES:
-        cmd = [
-            "bq", "load", "--source_format=CSV", "--skip_leading_rows=1", "--allow_quoted_newlines",
-            "--replace", f"{args.dataset}.{table}", str(paths[table]), str(schema_dir / f"{table}.schema.json"),
-        ]
-        print(" ".join(shlex.quote(c) for c in cmd))
-        if _gate(APPROVE_BQ_LOAD_ENV):
-            rc = subprocess.run(cmd).returncode or rc
+        rc = _run_bq_load(_bq_load_cmd(args.dataset, table, paths[table], schema_dir / f"{table}.schema.json")) or rc
+    if args.tables_only:
+        return rc
+    # HubSpot-Import-ready tables: the two CSVs review/deals write, regenerated here from the ledger (persisted
+    # statuses; deals-dry stays the pre-flight view) + the decisions overlay, then loaded so every surface reads
+    # them from BigQuery (console → Save results → wizard). Schemas are card-derived → written next to the ledger CSVs.
+    state_dir = Path(os.environ.get("MRLOAD_STATE_DIR", ".mrload"))
+    hierarchy = Path(args.hierarchy) if args.hierarchy else state_dir / "library_hierarchy.csv"
+    review_dir = Path(args.review_dir) if args.review_dir else state_dir / "review"
+    if not hierarchy.exists():
+        print(f"hubspot import tables skipped: no hierarchy CSV at {hierarchy} (run walk first)", file=sys.stderr)
+        return rc
+    rows = read_hierarchy_csv(hierarchy)
+    card = load_library_card(Path(args.card)) if args.card else load_library_card()
+    anchors = qualify_deal_anchors(rows, card)
+    decisions_path = Path(args.decisions) if args.decisions else review_dir / "deal_decisions.csv"
+    decisions = (read_decisions(decisions_path, default_pipeline=None, default_stage=None)
+                 if decisions_path.exists() else None)
+    imp = write_hubspot_import_files(rows, anchors, out_dir=review_dir, card=card, decisions=decisions, ledger=ledger)
+    schemas = write_bigquery_schemas(out_dir, card)
+    for table, csv_name in ((DEALS_IMPORT_TABLE, DEALS_IMPORT_FILE), (COMPANIES_IMPORT_TABLE, COMPANIES_IMPORT_FILE)):
+        rc = _run_bq_load(_bq_load_cmd(args.dataset, table, review_dir / csv_name, schemas[table])) or rc
+    print(f"hubspot import tables ({review_dir}): {json.dumps(imp)}", file=sys.stderr)
     return rc
 
 
@@ -454,10 +489,15 @@ def main(argv: list[str] | None = None) -> int:
     props.add_argument("--out-dir", default=".mrload/review", help="where stacksync_mapping.csv is written (verify)")
     props.set_defaults(func=cmd_properties)
 
-    lex = sub.add_parser("ledger-export", help="Step 6: ledger tables → CSV → BigQuery (gated bq load).")
+    lex = sub.add_parser("ledger-export", help="Step 6: ledger tables + HubSpot import tables → CSV → BigQuery (gated bq load).")
     lex.add_argument("--ledger")
-    lex.add_argument("--out-dir", default=".mrload/ledger_export")
+    lex.add_argument("--out-dir", default=".mrload/ledger_export", help="ledger CSVs + the import tables' schema JSONs")
     lex.add_argument("--dataset", required=True, help="raw dataset, e.g. mrload_raw")
+    lex.add_argument("--hierarchy", help="library_hierarchy.csv (default $MRLOAD_STATE_DIR/library_hierarchy.csv)")
+    lex.add_argument("--review-dir", help="where hubspot_*_import.csv are (re)written (default $MRLOAD_STATE_DIR/review)")
+    lex.add_argument("--decisions", help="deal_decisions.csv overlay (default <review-dir>/deal_decisions.csv when present)")
+    lex.add_argument("--card", default=None)
+    lex.add_argument("--tables-only", action="store_true", help="ledger tables only; skip the HubSpot import tables")
     lex.set_defaults(func=cmd_ledger_export)
 
     dl = sub.add_parser("deals", help="Pass 2: deals from the approved decisions file (gated).")

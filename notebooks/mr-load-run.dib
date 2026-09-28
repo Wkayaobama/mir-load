@@ -27,9 +27,9 @@ that is valid. Every step is idempotent (`scripts/run_pass1.sh`), records a chec
 | 11 | `attach-dry` | | row count = files under resolved companies |
 | 12 | `attach-upload` | LIVE `FILES_UPLOAD` | ledger `files_uploaded` all `uploaded` |
 | 13 | `attach-notes` | LIVE `FILE_NOTES_POST` | ledger `file_notes_posted` all `attached` |
-| 14 | `ledger-export` | LIVE `BQ_LOAD` | HubSpot ids visible in silver; StackSync syncs can be enabled |
+| 14 | `ledger-export` | LIVE `BQ_LOAD` | HubSpot ids visible in silver; StackSync syncs can be enabled; `mrload_raw.hubspot_deals_import` / `_companies_import` loaded |
 | 15 | `deals-dry` | | pass 2, one row per inferred deal in `deal_decisions.csv`, `approve=Y` rows; salvages orphan companies by name (search only); refreshes `hubspot_*_import.csv` |
-| 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery); or load the deals through the HubSpot Import wizard from `hubspot_deals_import.csv` |
+| 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery, import tables refreshed); or load the deals through the HubSpot Import wizard from `mrload_raw.hubspot_deals_import` (console → Save results) |
 
 **Two surfaces, one rule.** This notebook and a Cloud Shell (or any terminal) run the same
 `scripts/run_pass1.sh`, so a step yields the same result on either. What is local to a clone is
@@ -213,6 +213,10 @@ Invoke-Step 'attach-notes'
 #!markdown
 
 ### 14 · ledger-export — LIVE `MRLOAD_APPROVE_BQ_LOAD`; after it, enable the StackSync syncs
+Also regenerates `hubspot_deals_import.csv` / `hubspot_companies_import.csv` (ledger + `deal_decisions.csv`) and loads them as
+`mrload_raw.hubspot_deals_import` / `hubspot_companies_import` (snake_case, HubSpot internal names on the head columns), so the
+HubSpot Import wizard is fed from the BigQuery console on every surface: `SELECT * EXCEPT(pipeline, dealstage, op_company_status,
+op_api_status, op_api_error) FROM … WHERE op_approve = 'Y'` → Save results → Sheets/CSV → Import. The step prints the full recipe.
 
 #!pwsh
 
@@ -239,7 +243,7 @@ Invoke-Step 'deals-live'
 
 #!pwsh
 
-Invoke-Step 'ledger-export'      # deal ids back to BigQuery → silver_library_deal_candidates.hs_deal_id
+Invoke-Step 'ledger-export'      # deal ids back to BigQuery → silver_library_deal_candidates.hs_deal_id; import tables refreshed with Record IDs
 
 #!markdown
 

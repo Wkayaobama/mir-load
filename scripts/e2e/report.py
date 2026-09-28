@@ -5,7 +5,7 @@ Sources of truth compared against each other:
   hierarchy CSV (walker)  ·  SQLite ledger (pipeline belief)
   HubSpot mock /__state   ·  bq stub state  ·  dbt run_results.json  ·  DuckDB silver tables
 """
-import csv, json, sqlite3, sys, urllib.request
+import csv, filecmp, json, sqlite3, sys, urllib.request
 from pathlib import Path
 
 R = Path(sys.argv[1]); HS = sys.argv[2]
@@ -180,7 +180,7 @@ check("pass 2: hs_deal_id visible on the 5 indexed deal-candidate files through 
 
 # 7b. orphan salvage (pass 2 enrichment) + HubSpot import files + strict pass 1
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from pipeline.library_files.hubspot_import import deal_import_columns  # noqa: E402
+from pipeline.library_files.hubspot_import import bigquery_column_name, deal_import_columns  # noqa: E402
 co_rows = {r[0]: r for r in q("select company_node_key, company_name, hs_company_id, status from companies_resolved")}
 elta_key = next((k for k in co_rows if k.endswith("|2021_ELTA")), None)
 asel_key = next((k for k in co_rows if k.endswith("|2022_Aselsan")), None)
@@ -208,6 +208,16 @@ check("import: Company Record ID filled on 6 rows (incl. ELTA → 9002); company
 comp = list(csv.DictReader((R / "review" / "hubspot_companies_import.csv").open(encoding="utf-8")))
 check("import: hubspot_companies_import.csv lists exactly the confirmed-missing company (Aselsan) with its Drive folder link",
       [c["Company name"] for c in comp] == ["Aselsan"] and comp[0]["Description"].startswith("Drive folder: https://"), str(comp[:1]))
+# 7c. the same two files materialised in BigQuery by ledger-export (surface parity: console export → wizard)
+bq_deals = bq["tables"].get("mrload_raw.hubspot_deals_import", {}); bq_comp = bq["tables"].get("mrload_raw.hubspot_companies_import", {})
+check("bq: ledger-export loaded hubspot_deals_import (7 rows) + hubspot_companies_import (1 row) into mrload_raw with --replace, no load errors",
+      bq_deals.get("rows") == 7 and bq_comp.get("rows") == 1 and bq_deals.get("replace") and bq_comp.get("replace") and not bq["errors"],
+      f"{bq_deals.get('rows')}/{bq_comp.get('rows')} rows")
+bq_schema = jload(R / "ledger_export" / "hubspot_deals_import.schema.json")
+check("bq: the loaded deals table is byte-identical to review/hubspot_deals_import.csv; schema names = snake_case headers in CSV order (23, positional)",
+      filecmp.cmp(R / "bqstub" / "mrload_raw.hubspot_deals_import.csv", R / "review" / "hubspot_deals_import.csv", shallow=False)
+      and [f["name"] for f in bq_schema] == [bigquery_column_name(h) for h in deal_import_columns(load_library_card())] and len(bq_schema) == 23,
+      f"{len(bq_schema)} columns, head {[f['name'] for f in bq_schema[:2]]}")
 
 # 8. sequence bookkeeping: checkpoints + pipeline_state (what the run-sheet notebook reads)
 ck = [l.split("\t") for l in (R / "checkpoints.tsv").read_text().splitlines()]

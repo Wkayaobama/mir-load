@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import csv
+import json
+import re
 from pathlib import Path
 
 from pipeline.library_files.card import load_library_card
 from pipeline.library_files.deal_anchors import qualify_deal_anchors
 from pipeline.library_files.deals import read_decisions
-from pipeline.library_files.hubspot_import import (DEAL_HEAD, DEAL_TAIL, company_import_columns, deal_import_columns,
-                                                   write_hubspot_import_files)
+from pipeline.library_files.hubspot_import import (BQ_COLUMN_NAMES, BQ_NAME_RX, COMPANIES_IMPORT_TABLE, DEAL_HEAD,
+                                                   DEAL_TAIL, DEALS_IMPORT_TABLE, bigquery_column_name,
+                                                   company_import_columns, deal_import_columns, import_table_schemas,
+                                                   write_bigquery_schemas, write_hubspot_import_files)
 from pipeline.library_files.ledger import SqliteLedger
 from tests.test_deals import CO, DECISION_COLUMNS, ELTA, HIER_ELTA, RFQ, TENDER, _elta_decision
 
@@ -84,3 +88,75 @@ def test_unknown_card_column_is_blank_and_reported(tmp_path: Path):
     summary = write_hubspot_import_files(HIER_ELTA, anchors, out_dir=tmp_path, card=card)
     deals = _read(tmp_path / "hubspot_deals_import.csv")
     assert all(r["mrload_nonexistent"] == "" for r in deals) and summary["unmapped_card_columns"] == ["nonexistent"]
+
+
+# --- BigQuery materialisation (ledger-export loads the same two files as mrload_raw.hubspot_*_import) ---
+
+def test_bigquery_column_names_are_hubspot_internal_names_or_sanitised_headers():
+    assert bigquery_column_name("Record ID") == "hs_object_id" and bigquery_column_name("Deal Name") == "dealname"
+    assert bigquery_column_name("Deal Stage") == "dealstage" and bigquery_column_name("Deal Description") == "description"
+    assert bigquery_column_name("Company Record ID") == "company_hs_object_id" and bigquery_column_name("Company Name") == "company_name"
+    assert bigquery_column_name("Company name") == "name" and bigquery_column_name("Company Domain Name") == "domain"
+    assert bigquery_column_name("Approve (mr-load)") == "op_approve" and bigquery_column_name("API error (mr-load)") == "op_api_error"
+    assert bigquery_column_name("mrload_pdf_count") == "mrload_pdf_count"          # card names pass through unchanged
+    assert bigquery_column_name("Weird Header (x)") == "weird_header_x" and bigquery_column_name("1st Contact") == "c_1st_contact"
+    assert all(BQ_NAME_RX.match(v) for v in BQ_COLUMN_NAMES.values())
+    assert not any(v.startswith("mrload_") for v in BQ_COLUMN_NAMES.values())     # bookkeeping never looks like a property
+
+
+def test_import_table_schemas_follow_the_csv_columns_in_order_with_types_from_the_card():
+    card = load_library_card()
+    schemas = import_table_schemas(card)
+    deals, comps = schemas[DEALS_IMPORT_TABLE], schemas[COMPANIES_IMPORT_TABLE]
+    assert [f["name"] for f in deals] == [bigquery_column_name(c) for c in deal_import_columns(card)] and len(deals) == 23
+    assert [f["name"] for f in comps] == [bigquery_column_name(c) for c in company_import_columns(card)] and len(comps) == 13
+    for schema in (deals, comps):
+        names = [f["name"] for f in schema]
+        assert len(set(names)) == len(names) and all(BQ_NAME_RX.match(n) for n in names)
+        assert all(f["mode"] == "NULLABLE" for f in schema)
+    types = {f["name"]: f["type"] for f in deals}
+    assert types["hs_object_id"] == "STRING" and types["amount"] == "STRING" and types["op_approve"] == "STRING"
+    assert types["mrload_pdf_count"] == "INT64" and types["mrload_drive_modified_at"] == "TIMESTAMP" and types["mrload_segment"] == "STRING"
+    assert [f["type"] for f in deals].count("INT64") == 3 and [f["type"] for f in comps].count("INT64") == 3
+    assert [f["type"] for f in deals].count("TIMESTAMP") == 1 and [f["type"] for f in comps].count("TIMESTAMP") == 1
+
+
+def test_import_table_schemas_reject_a_card_field_colliding_with_a_head_column():
+    card = load_library_card()
+    card.raw["hubspot"]["properties"]["objects"]["deals"]["fields"].append({"name": "amount", "column": "amount", "type": "string"})
+    try:
+        import_table_schemas(card)
+    except ValueError as e:
+        assert "amount" in str(e)
+    else:
+        raise AssertionError("duplicate BigQuery column name must be rejected before bq load")
+
+
+def test_write_bigquery_schemas_writes_one_json_per_table_and_round_trips(tmp_path: Path):
+    card = load_library_card()
+    paths = write_bigquery_schemas(tmp_path / "ledger_export", card)
+    assert set(paths) == {DEALS_IMPORT_TABLE, COMPANIES_IMPORT_TABLE}
+    for table, p in paths.items():
+        assert p == tmp_path / "ledger_export" / f"{table}.schema.json"
+        assert json.loads(p.read_text()) == import_table_schemas(card)[table]
+
+
+def test_written_import_csv_values_satisfy_the_generated_schema_types(tmp_path: Path):
+    """What bq load checks positionally per row: column count, INT64 parse, TIMESTAMP shape, blanks → NULL."""
+    card = load_library_card()
+    anchors = qualify_deal_anchors(HIER_ELTA, card)
+    write_hubspot_import_files(HIER_ELTA, anchors, out_dir=tmp_path, card=card)
+    schemas = import_table_schemas(card)
+    for table in (DEALS_IMPORT_TABLE, COMPANIES_IMPORT_TABLE):
+        with (tmp_path / f"{table}.csv").open(encoding="utf-8", newline="") as fp:
+            rows = list(csv.reader(fp))
+        assert [bigquery_column_name(h) for h in rows[0]] == [f["name"] for f in schemas[table]]
+        for row in rows[1:]:
+            assert len(row) == len(schemas[table])
+            for v, f in zip(row, schemas[table]):
+                if v == "":
+                    continue
+                if f["type"] == "INT64":
+                    int(v)
+                if f["type"] == "TIMESTAMP":
+                    assert re.match(r"^\d{4}-\d{2}-\d{2}", v), (f["name"], v)
