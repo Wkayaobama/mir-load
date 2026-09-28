@@ -6,7 +6,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; cd "$REPO_ROOT"
 SHEET="${MRLOAD_STATE_DIR:-.mrload}/review/stacksync_mapping.csv"
 [[ -f "$SHEET" ]] || { echo "no $SHEET yet — run scripts/run_pass1.sh hs-props-verify (after dbt)"; exit 1; }
 ALL="${1:-}" SHEET="$SHEET" python3 - <<'PY'
-import csv, collections, os
+import csv, collections, os, signal
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)   # quiet when piped into head/less
 rows = list(csv.DictReader(open(os.environ["SHEET"], encoding="utf-8", newline="")))
 c = collections.Counter((r["object_type"], r["status"]) for r in rows)
 print(f"{os.environ['SHEET']}: {len(rows)} rows")
