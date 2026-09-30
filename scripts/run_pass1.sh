@@ -18,8 +18,9 @@
 #   attach-dry      3b. row count per company, nothing fired
 #   attach-upload   4b. phase 1: Drive → HubSpot Files                       [gate FILES_UPLOAD]
 #   attach-notes    5b. phase 2: note + association → company                [gate FILE_NOTES_POST]
-#   ledger-export   6.  ledger → CSV → mrload_raw.* + dbt build              [gate BQ_LOAD]
-#   deals-dry       7.  pass 2 dry run from the edited decisions file
+#   ledger-export   6.  ledger → CSV → mrload_raw.* + hubspot_*_import tables + dbt build   [gate BQ_LOAD]
+#   deals-dry       7.  pass 2 dry run from the edited decisions file (salvage persisted);
+#                       then ledger-export → BigQuery console → HubSpot Import, or deals-live (docs/PASS2_SEQUENCE.md)
 #   deals-live      7.  pass 2 create deals + associations                   [gate DEAL_CREATE]
 #   status          ledger + artefact summary
 #   all             preflight → … → ledger-export with a checkpoint before every live gate
@@ -259,7 +260,7 @@ step_hs_props_verify() {
 step_review() {
   say "review — operator queues (offline)"
   [[ -f "$HIER" ]] || die "run 'walk' first"
-  logrun review $RUNNER review-export --hierarchy "$HIER" --out-dir "$REVIEW"
+  logrun review $RUNNER review-export --hierarchy "$HIER" --out-dir "$REVIEW" --ledger "$LEDGER"
   echo
   echo "   OPERATOR: open $REVIEW/"
   echo "     companies.csv          → the company objects that will be searched/created (names = folder names)"
@@ -270,6 +271,25 @@ step_review() {
   echo "     deal_anchors.csv       → inferred deals: qualified level-3 folders (PDF beneath, not exhibition-shaped) + self-anchored PO/Billing PDFs"
   echo "     deal_documents.csv     → files beneath an inferred deal that pass 2 does NOT associate yet (notes API later)"
   echo "     deal_decisions.csv     → ONE ROW PER INFERRED DEAL: edit approve=Y, dealname, pipeline, dealstage, amount for pass 2"
+  echo "     hubspot_deals_import.csv     → HubSpot Import tool: one row per inferred deal + company association (Record IDs from the ledger)"
+  echo "     hubspot_companies_import.csv → companies referenced by deals and confirmed missing in the portal (import FIRST, then deals-dry, then deals)"
+}
+deals_summary() {  # deals_summary <json> <review dir>
+  $PY - "$1" "$2" <<'EOF'
+import json, sys, collections
+d = json.load(open(sys.argv[1])); review = sys.argv[2]
+print(dict(collections.Counter(r["status"] for r in d)))
+for r in d:
+    if r["status"] in ("failed", "partial", "no_company_resolved"):
+        print(f"  !! {(r.get('dealname') or r['legacy_library_id'])[:44]:<44} {r['status']:<20} {(r.get('company_status') or ''):<18} {(r.get('error') or '')[:150]}")
+miss = sum(1 for r in d if r.get("company_status") == "missing_in_portal")
+if miss:
+    print(f"  → {miss} deal(s) whose company is not in the portal: import {review}/hubspot_companies_import.csv (Companies),")
+    print(f"    re-run deals-dry (the salvage then finds them), then import {review}/hubspot_deals_import.csv (Deals + Companies by Record ID)")
+if any("create_error" in (r.get("error") or "") for r in d):
+    print("  → create_error: HubSpot refused the deal — a dealstage/pipeline value must be the STAGE/PIPELINE ID of THIS portal (GET /crm/v3/pipelines/deals)")
+EOF
+  echo "   Import-ready files (refreshed by every deals run): $2/hubspot_deals_import.csv · $2/hubspot_companies_import.csv"
 }
 
 step_companies_dry() {
@@ -325,21 +345,30 @@ step_attach_notes() {
 }
 
 step_ledger_export() {
-  say "6/ledger-export — HubSpot ids → BigQuery (mrload_raw.*) → dbt build"
-  $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS"
-  confirm "Load the 4 ledger tables into $RAW_DS and rebuild silver?"
-  MRLOAD_APPROVE_BQ_LOAD=1 logrun ledger-export $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS"
+  say "6/ledger-export — HubSpot ids → BigQuery (mrload_raw.*) + HubSpot import tables → dbt build"
+  $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS" --hierarchy "$HIER" --review-dir "$REVIEW"
+  confirm "Load the 4 ledger tables + 2 HubSpot import tables into $RAW_DS and rebuild silver?"
+  MRLOAD_APPROVE_BQ_LOAD=1 logrun ledger-export $RUNNER ledger-export --ledger "$LEDGER" --out-dir "$STATE/ledger_export" --dataset "$RAW_DS" --hierarchy "$HIER" --review-dir "$REVIEW"
   ( cd dbt && logrun dbt-build dbt build --profiles-dir . --target "$DBT_TARGET" )
   echo "   Result: silver_library_company.hs_company_id, silver_library_index.hs_file_id/hs_note_id now populated"
   echo "   → the associativity layer can join on them."
+  echo "   HubSpot Import from any surface (BigQuery console, no local file needed) — regenerated from ledger + deal_decisions.csv:"
+  echo "     SELECT * EXCEPT(pipeline, dealstage, op_company_status, op_api_status, op_api_error)"
+  echo "     FROM \`${MRLOAD_BQ_PROJECT:-<project>}.${RAW_DS}.hubspot_deals_import\` WHERE op_approve = 'Y' ORDER BY company_name, dealname"
+  echo "     → Save results → Google Sheets or CSV → HubSpot Import (one file, Deals + Companies); pick pipeline + stage when prompted."
+  echo "     Map once: hs_object_id → Deals·Record ID (blank = create, filled = update); company_hs_object_id → Companies·Record ID"
+  echo "     (the association); dealname / amount / description / mrload_* auto-match; company_name → Don't import."
+  echo "     Companies first when ${RAW_DS}.hubspot_companies_import has rows (name / domain / description), then re-run deals-dry."
 }
 
 step_deals_dry() {
   say "7/deals-dry — pass 2 from $REVIEW/deal_decisions.csv (approve=Y rows only; one deal per inferred anchor)"
   [[ -f "$REVIEW/deal_decisions.csv" ]] || die "run 'review' and edit deal_decisions.csv first"
   logrun deals-dry $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --hierarchy "$HIER" --ledger "$LEDGER" >"$STATE/deals_dry.json" || true
-  $PY -c "import json,collections;d=json.load(open('$STATE/deals_dry.json'));print(dict(collections.Counter(r['status'] for r in d)))"
-  echo "   OPERATOR: would_create = approved rows with dealname+dealstage; no_company_resolved = run companies-live first;"
+  deals_summary "$STATE/deals_dry.json" "$REVIEW"
+  echo "   OPERATOR: would_create = approved rows with dealname+dealstage; no_company_resolved = company not in the ledger:"
+  echo "   a company folder → run companies-live; a year-prefixed company folder (e.g. 2021_ELTA) → the pass-2 salvage searched"
+  echo "   HubSpot by its name (recorded in the ledger, dry run included) and found nothing → import hubspot_companies_import.csv."
   echo "   set MRLOAD_DEAL_PIPELINE / MRLOAD_DEAL_STAGE (portal ids) or fill them per row."
 }
 
@@ -349,6 +378,7 @@ step_deals_live() {
   confirm "Create $n deals, associate deal → company and note → deal?"
   MRLOAD_APPROVE_DEAL_CREATE=1 logrun deals-live $RUNNER deals --decisions "$REVIEW/deal_decisions.csv" --hierarchy "$HIER" --ledger "$LEDGER" >"$STATE/deals_live.json" || true
   ledger_sql "select status, count(*) from deals_created group by status"
+  deals_summary "$STATE/deals_live.json" "$REVIEW"
   echo "   Then re-run: scripts/run_pass1.sh ledger-export   (hs_deal_id → silver_library_deal_candidates)"
 }
 

@@ -20,7 +20,8 @@ from urllib.parse import urlparse
 
 STATE = {
     "portalId": 424242,
-    "companies": {"9001": {"id": "9001", "properties": {"name": "Thorlabs", "domain": "thorlabs.com"}}},
+    "companies": {"9001": {"id": "9001", "properties": {"name": "Thorlabs", "domain": "thorlabs.com"}},
+                  "9002": {"id": "9002", "properties": {"name": "ELTA", "domain": "elta.example"}}},   # pass-2 salvage target
     "files": {}, "notes": {}, "deals": {}, "associations": [],
     # property DEFINITIONS (schema propagation step). One pre-existing definition + group on
     # companies so the ensure step exercises the "exists / not modified" path.

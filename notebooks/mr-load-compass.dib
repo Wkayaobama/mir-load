@@ -76,6 +76,7 @@ flowchart TD
     A2 --> A3["attach-notes ⟨FILE_NOTES_POST⟩\nphase 2: note + association"]
     A3 --> L["ledger-export ⟨BQ_LOAD⟩\nSQLite ledger → BigQuery → dbt build"]
     L --> DD["deals-dry (pass 2, from the edited decisions file)"] --> DL["deals-live ⟨DEAL_CREATE⟩"]
+    DD --> L2["ledger-export\nimport tables → BigQuery console → HubSpot Import"]
 
 #!markdown
 
@@ -628,7 +629,10 @@ Invoke-Ubuntu 'scripts/run_pass1.sh attach-notes' -Live
 
 ### 6.8 · ledger-export — **LIVE** (gate `MRLOAD_APPROVE_BQ_LOAD`)
 Exports the SQLite ledger to CSV, loads it into `mrload_raw.*` and runs `dbt build`, so the
-index in BigQuery carries the HubSpot ids and statuses.
+index in BigQuery carries the HubSpot ids and statuses. It also regenerates the two HubSpot Import
+files from the ledger + `deal_decisions.csv` and loads them as `mrload_raw.hubspot_deals_import` /
+`hubspot_companies_import` (snake_case columns), so the import wizard can be fed from the BigQuery
+console on any surface — the step prints the query and the column mapping (runbook §7).
 
 #!pwsh
 
@@ -648,7 +652,12 @@ Invoke-Ubuntu 'scripts/run_pass1.sh status'
 # 7 · Pass 2 — deals from PO / Billing PDFs (only after you edited the decisions file)
 
 Edit `.mrload/review/deal_decisions.csv` (VS Code, Rainbow CSV): one row per inferred deal (level-3 folder with a PDF
-beneath, or a PO/Billing PDF directly under the company); approve per row, amounts, pipeline/stage overrides. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
+beneath, or a PO/Billing PDF directly under the company); approve per row, amounts, pipeline/stage overrides.
+Orphan companies (year-prefixed company folders) are salvaged by a name search, never created; the same run
+refreshes `hubspot_deals_import.csv` / `hubspot_companies_import.csv` for the HubSpot Import wizard (and `ledger-export` loads them
+into `mrload_raw.hubspot_*_import` for the console path). In order: `review` → edit → `deals-dry` → `ledger-export` →
+console import **or** `deals-live` → `ledger-export`; the recipe with the view / edit / probe commands per surface is
+`docs/PASS2_SEQUENCE.md`. Dry first, then **LIVE** (gate `MRLOAD_APPROVE_DEAL_CREATE`).
 
 #!pwsh
 
@@ -666,7 +675,7 @@ Invoke-Ubuntu 'scripts/run_pass1.sh deals-live' -Live
 - **unit tests**: the walker, card, hierarchy writer, ledger, uploader, companies, deals.
 - **e2e rehearsal (clean)**: the real code against local stand-ins — a Drive v3 mock, a HubSpot
   mock that returns one 429, a `bq` stub that validates schema/types, dbt on DuckDB — driving
-  `scripts/run_pass1.sh` step by step. Expected: `28/28 checks` in `.mrload/rehearsal/REPORT.md`.
+  `scripts/run_pass1.sh` step by step. Expected: `50/50 checks` in `.mrload/rehearsal/REPORT.md`.
 - **e2e rehearsal (dirty)**: a broken tree; expected outcome is a **stop at the dbt gate** with
   zero HubSpot writes — that is the contract working.
 

@@ -21,6 +21,24 @@ from .card import LibraryCard
 
 ANCHOR_FOLDER = "folder"
 ANCHOR_FILE = "file"
+COMPANY_FOLDER = "company_folder"
+
+
+def company_display_name(company_row: Optional[dict]) -> str:
+    """HubSpot-facing name of a company node. A company_folder is its folder name; a self-anchored
+    year-prefixed folder at company level ("2021_ELTA", classified engagement_folder) is the remainder
+    the walker inferred ("ELTA"). Always call it with the COMPANY node row, never with an anchor row."""
+    if not company_row:
+        return ""
+    if company_row.get("libr_category") == COMPANY_FOLDER:
+        return company_row.get("node_name") or ""
+    return company_row.get("inferred_company_name") or company_row.get("node_name") or ""
+
+
+def company_rows_for_anchors(rows: Iterable[dict], anchors: dict) -> dict[str, dict]:
+    """{company_node_key: hierarchy row of that company node} for every company an anchor references."""
+    by_key = {r["node_key"]: r for r in rows}
+    return {a.company_node_key: by_key[a.company_node_key] for a in anchors.values() if a.company_node_key in by_key}
 
 
 @dataclass

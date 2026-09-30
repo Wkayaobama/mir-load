@@ -112,11 +112,16 @@ bq-load        hierarchy → mrload_raw.library_hierarchy                       
 hs-props       HubSpot property DEFINITIONS from the card (StackSync targets; values never written here) [MRLOAD_APPROVE_PROPERTY_CREATE]
 dbt run/test   silver_library_company / _index / _deal_candidates / _parked / _orphans + cardinality tests (+ docs generate → catalog)
 hs-props-verify definitions vs built silver (catalog) → review/stacksync_mapping.csv (the sheet you map in the StackSync UI)
-review-export  operator queues + deal_anchors.csv / deal_documents.csv + deal_decisions.csv (one row per inferred deal)
+review-export  operator queues + deal_anchors.csv / deal_documents.csv + deal_decisions.csv + hubspot_*_import.csv (HubSpot Import files)
 companies      company folder → HubSpot company (search by name, create)     [MRLOAD_APPROVE_COMPANY_CREATE]
 attach         download on demand → POST files → note → associate to company [MRLOAD_APPROVE_FILES_UPLOAD, MRLOAD_APPROVE_FILE_NOTES_POST]
 ledger-export  ledger → mrload_raw.{companies_resolved,files_uploaded,file_notes_posted,deals_created} → dbt build
+               + hubspot_*_import.csv regenerated (ledger + deal_decisions.csv) → mrload_raw.hubspot_deals_import / hubspot_companies_import
+               (snake_case columns, CSV order; console export → HubSpot Import wizard from any surface)
 deals          pass 2: one deal per approved ANCHOR → company; every PO/Billing note beneath → deal  [MRLOAD_APPROVE_DEAL_CREATE]
+               orphan salvage: a year-prefixed company folder's deal is associated to the company found by name (never created);
+               every run refreshes hubspot_deals_import.csv / hubspot_companies_import.csv
+               order: review → (edit) → deals-dry → ledger-export → console import | deals-live → ledger-export  (docs/PASS2_SEQUENCE.md)
 unmigrate      delete attached notes from the ledger                          [MRLOAD_APPROVE_UNMIGRATE]
 ```
 

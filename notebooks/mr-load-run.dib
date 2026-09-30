@@ -27,9 +27,10 @@ that is valid. Every step is idempotent (`scripts/run_pass1.sh`), records a chec
 | 11 | `attach-dry` | | row count = files under resolved companies |
 | 12 | `attach-upload` | LIVE `FILES_UPLOAD` | ledger `files_uploaded` all `uploaded` |
 | 13 | `attach-notes` | LIVE `FILE_NOTES_POST` | ledger `file_notes_posted` all `attached` |
-| 14 | `ledger-export` | LIVE `BQ_LOAD` | HubSpot ids visible in silver; StackSync syncs can be enabled |
-| 15 | `deals-dry` | | pass 2, one row per inferred deal (anchor) in `deal_decisions.csv`, only `approve=Y` rows |
-| 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery) |
+| 14 | `ledger-export` | LIVE `BQ_LOAD` | HubSpot ids visible in silver; StackSync syncs can be enabled; `mrload_raw.hubspot_deals_import` / `_companies_import` loaded |
+| 15 | `deals-dry` | | pass 2, one row per inferred deal in `deal_decisions.csv`, `approve=Y` rows; salvages orphan companies by name (search only, persisted); refreshes `hubspot_*_import.csv`. Then either 15b or 16 |
+| 15b | `ledger-export` (wizard route) | LIVE `BQ_LOAD` | `mrload_raw.hubspot_deals_import` carries the salvaged company ids → BigQuery console → Save results → HubSpot Import; probe with `bq query` (`docs/PASS2_SEQUENCE.md`) |
+| 16 | `deals-live` | LIVE `DEAL_CREATE` | then `ledger-export` once more (deal ids back to BigQuery, import tables refreshed); or load the deals through the HubSpot Import wizard from `mrload_raw.hubspot_deals_import` (console → Save results) |
 
 **Two surfaces, one rule.** This notebook and a Cloud Shell (or any terminal) run the same
 `scripts/run_pass1.sh`, so a step yields the same result on either. What is local to a clone is
@@ -51,6 +52,7 @@ flowchart LR
     s6 -- yes --> s7["7 hs-props-verify"] --> s8["8 review"] --> s9["9 companies-dry"] --> s10["10 companies-live ⟨LIVE⟩"]
     s10 --> s11["11 attach-dry"] --> s12["12 attach-upload ⟨LIVE⟩"] --> s13["13 attach-notes ⟨LIVE⟩"] --> s14["14 ledger-export ⟨LIVE⟩"]
     s14 -. "approve=Y rows" .-> s15["15 deals-dry"] --> s16["16 deals-live ⟨LIVE⟩"] --> s14b["ledger-export again"]
+    s15 --> s15b["15b ledger-export ⟨LIVE⟩\nimport tables → BigQuery console → HubSpot Import"]
 
 #!markdown
 
@@ -213,6 +215,10 @@ Invoke-Step 'attach-notes'
 #!markdown
 
 ### 14 · ledger-export — LIVE `MRLOAD_APPROVE_BQ_LOAD`; after it, enable the StackSync syncs
+Also regenerates `hubspot_deals_import.csv` / `hubspot_companies_import.csv` (ledger + `deal_decisions.csv`) and loads them as
+`mrload_raw.hubspot_deals_import` / `hubspot_companies_import` (snake_case, HubSpot internal names on the head columns), so the
+HubSpot Import wizard is fed from the BigQuery console on every surface: `SELECT * EXCEPT(pipeline, dealstage, op_company_status,
+op_api_status, op_api_error) FROM … WHERE op_approve = 'Y'` → Save results → Sheets/CSV → Import. The step prints the full recipe.
 
 #!pwsh
 
@@ -223,11 +229,33 @@ Invoke-Step 'ledger-export'
 ### Pass 2 — only after you set `approve=Y` on rows of `.mrload/review/deal_decisions.csv`
 One row per **inferred deal**: a level-3 folder with a PDF beneath (outside the exhibition list), or a PO/Billing PDF
 directly under the company. `deals-live` creates the deal and associates every PO/Billing note beneath it; other
-documents are listed in `deal_documents.csv` for a later association. Reference: `docs/WALKER_DFS_AND_PATTERNS.md`.
+documents are listed in `deal_documents.csv` for a later association. An anchor whose company is a year-prefixed
+company folder (`2021_ELTA`) is salvaged by a HubSpot search on the remainder name (`ELTA`), never by creating it;
+the salvage is persisted in the ledger by `deals-dry` already.
+
+**In order:** `review` → edit `deal_decisions.csv` on this clone → `deals-dry` → `ledger-export` (materialises
+`mrload_raw.hubspot_deals_import` / `hubspot_companies_import`) → **either** the HubSpot Import wizard fed from the
+BigQuery console (Save results; companies first when the companies table has rows, then `deals-dry` and
+`ledger-export` again, then the deals; set `approve=N` on imported rows afterwards) **or** `deals-live`, which creates
+and associates the salvaged deals through the API like any other approved row → `ledger-export` once more. The
+full recipe with the view / edit / probe commands: `docs/PASS2_SEQUENCE.md`. Reference: `docs/WALKER_DFS_AND_PATTERNS.md`, runbook §7.
 
 #!pwsh
 
 Invoke-Step 'deals-dry'
+
+#!markdown
+
+**Wizard route (optional, 15b).** Materialise the import tables now and probe them; then feed HubSpot Import from the
+BigQuery console. Skip both cells for the API route (`deals-live` below).
+
+#!pwsh
+
+Invoke-Step 'ledger-export'      # 15b · mrload_raw.hubspot_*_import now (LIVE gate BQ_LOAD; refused until $ConfirmLive)
+
+#!pwsh
+
+Invoke-Ubuntu 'bq query --use_legacy_sql=false "select dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id from \`wisekeybq.mrload_raw.hubspot_deals_import\` order by company_name, dealname"'
 
 #!pwsh
 
@@ -235,7 +263,7 @@ Invoke-Step 'deals-live'
 
 #!pwsh
 
-Invoke-Step 'ledger-export'      # deal ids back to BigQuery → silver_library_deal_candidates.hs_deal_id
+Invoke-Step 'ledger-export'      # deal ids back to BigQuery → silver_library_deal_candidates.hs_deal_id; import tables refreshed with Record IDs
 
 #!markdown
 

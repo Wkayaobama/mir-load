@@ -9,7 +9,9 @@ Nothing here is exported globally. `--yes` skips the prompts (CI / re-runs).
 scripts/run_pass1.sh preflight → walk → bq-init → bq-load → dbt → review
                      → companies-dry → companies-live
                      → attach-dry → attach-upload → attach-notes
-                     → ledger-export → (edit deal_decisions.csv) → deals-dry → deals-live
+                     → ledger-export → (edit deal_decisions.csv) → deals-dry
+                     → ledger-export (import tables) → HubSpot Import from the BigQuery console | deals-live → ledger-export
+                       (pass 2 in order, per surface: docs/PASS2_SEQUENCE.md)
 scripts/run_pass1.sh all      # pass 1 end-to-end with a checkpoint before each live gate
 scripts/run_pass1.sh status   # ledger + artefact summary at any time
 ```
@@ -301,7 +303,30 @@ hs_note_id / attach_status` and `silver_library_deal_candidates.hs_deal_id` are
 populated — the join keys the associativity layer needs. Re-run after every
 live HubSpot step to keep BigQuery current.
 
+The same run also **materialises the two HubSpot Import files as BigQuery tables**,
+`mrload_raw.hubspot_deals_import` and `mrload_raw.hubspot_companies_import` (surface
+parity: Cloud Shell, the notebooks and WezTerm all read them from BigQuery instead of a
+local CSV). They are regenerated first, from the ledger's persisted statuses plus
+`review/deal_decisions.csv` when it exists, into `.mrload/review/`, then loaded with a
+card-derived schema written to `.mrload/ledger_export/<table>.schema.json`: one NULLABLE
+column per CSV column, in CSV order, **snake_case** names — the head columns carry the
+HubSpot internal names (`hs_object_id`, `dealname`, `pipeline`, `dealstage`, `amount`,
+`description`, `company_hs_object_id`, `company_name`; companies: `name`, `domain`,
+`description`), the card properties keep their `mrload_*` names (counts → INT64,
+`mrload_drive_modified_at` → TIMESTAMP), and the four bookkeeping columns become
+`op_approve`, `op_company_status`, `op_api_status`, `op_api_error`. Before `walk` has run
+the import tables are skipped with a note; `--tables-only` (used by the rehearsal) exports
+the ledger tables alone. The ledger tables load first, so a failed import-table load is
+reported per table and stops the step before `dbt build`. Because only *persisted* results
+are known here, a `deals-dry` outcome such as `would_create` does not show in these tables:
+`deals-dry` stays the authoritative pre-flight view, and `dealname` / `amount` edits belong
+in `deal_decisions.csv` — the import files and tables are generated, never edited.
+
 ## 7. `deals-dry` / `deals-live` — pass 2  [gate MRLOAD_APPROVE_DEAL_CREATE]
+
+**Pass 2 in order, on any surface, with the commands to look at and edit every file from a
+terminal (Cloud Shell included) and the BigQuery probe of the import tables: `docs/PASS2_SEQUENCE.md`.**
+This section is the reference for each step.
 
 **Unit of work: the inferred deal, not the PDF** (side branch `walker-deal-depth3`; the
 inference is documented in `docs/WALKER_DFS_AND_PATTERNS.md` §6). `review` writes:
@@ -315,6 +340,23 @@ inference is documented in `docs/WALKER_DFS_AND_PATTERNS.md` §6). `review` writ
 - `deal_decisions.csv` — **one row per anchor**, `approve=N`, `dealname` prefilled as
   `<company> - <anchor name>`; fill `pipeline`, `dealstage` (portal ids; or set
   `MRLOAD_DEAL_PIPELINE` / `MRLOAD_DEAL_STAGE`) and `amount`.
+- `hubspot_deals_import.csv` / `hubspot_companies_import.csv` — the **HubSpot Import** files, written
+  by `review` (ids from the ledger when it exists), refreshed by every `deals-dry` / `deals-live`, and
+  loaded into BigQuery by `ledger-export` (`mrload_raw.hubspot_deals_import` / `_companies_import`).
+  See *Import path* below.
+
+**Orphan salvage (pass-2 enrichment).** An anchor whose company node is a self-anchored
+year-prefixed folder (`2021_ELTA` → `engagement_folder`, never resolved by `companies-live`) has no
+company in the ledger. Pass 2 looks it up in HubSpot by the remainder name (`ELTA`), **never
+creates** it: one hit → the deal is associated to it and the ledger gets `matched_by_name_pass2`;
+none → `not_in_portal_pass2` and the company goes to `hubspot_companies_import.csv`; several →
+`ambiguous_match_pass2`. The search runs in dry mode too (like `companies-dry`, the ledger records what
+HubSpot *is*; creates stay behind the gate) and is repeated on every run until a match, so a company
+you import meanwhile is picked up by the next `deals-dry`. Companies owned by `companies.py`
+(`company_folder` rows) are never touched: a missing one still says `run companies live first`.
+**Strict pass 1:** salvaged companies are visible to pass 2 only — `attach-*` keeps ignoring the
+files under those folders, exactly as before.
+
 
 ```bash
 scripts/run_pass1.sh deals-dry     # would_create per approved anchor + how many notes it will attach
@@ -323,8 +365,60 @@ scripts/run_pass1.sh ledger-export # hs_deal_id back into silver_library_deal / 
 ```
 
 Idempotent through `ledger.deals_created`, keyed by the anchor's library id; `hs_note_id`
-there holds the associated note ids, `;`-joined. `partial` = deal created, one association
-failed; re-run converges. To change the heuristic (minimum PDFs, excluded names) edit
+there holds the associated note ids, `;`-joined. `deals-dry` / `deals-live` print `!!` lines for
+`failed`, `partial` and `no_company_resolved` rows with the HubSpot error text, so a
+`create_error` (typically a `dealstage` / `pipeline` value that is not a stage id of *this* portal)
+is visible without opening the ledger.
+
+**Import path (no API dependency; pipeline and stage are chosen per portal in the wizard).**
+`hubspot_deals_import.csv` has one row per inferred anchor: `Record ID` (filled when the API already
+created the deal → the wizard *updates* it instead of duplicating), `Deal Name`, `Pipeline` and
+`Deal Stage` (blank on purpose), `Amount`, `Deal Description`, `Company Record ID` (pass 1 or
+salvaged), `Company Name`, then the card's deals properties by internal name (what `hs-props`
+created), then four `(mr-load)` bookkeeping columns. Order, which is load-bearing:
+
+1. Import `hubspot_companies_import.csv` as **Companies** — only the companies confirmed missing;
+   never import it twice (no domain, HubSpot cannot dedupe by name).
+2. `scripts/run_pass1.sh deals-dry` — the salvage finds them, `Company Record ID` fills — then
+   `scripts/run_pass1.sh ledger-export`, which materialises the refreshed files as the two
+   `mrload_raw.hubspot_*_import` tables (the console route below reads those).
+3. Import `hubspot_deals_import.csv` as **Deals + Companies**: map `Record ID` → Deals / Record ID,
+   `Company Record ID` → Companies / Record ID (the association), `Company Name` and the four
+   `(mr-load)` columns → *Don't import*, choose pipeline and stage in the wizard.
+4. Set `approve=N` on rows you imported through the wizard: a later `deals-live` would otherwise
+   create them again through the API (the ledger does not know wizard-created deals).
+
+Edit the CSV as text (Excel turns Record IDs into scientific notation); skip
+`mrload_drive_modified_at` if the wizard rejects the ISO timestamp. `review` overwrites
+`deal_decisions.csv`, so `deals-dry` is the authoritative refresh of the import files. `partial` = deal created, one association
+failed; re-run converges.
+
+**Import path from any surface (BigQuery console, no local file).** After `ledger-export`
+the same two files exist as `mrload_raw.hubspot_deals_import` / `hubspot_companies_import`,
+so a Cloud Shell run needs no file transfer. In the BigQuery console:
+
+```sql
+SELECT * EXCEPT(pipeline, dealstage, op_company_status, op_api_status, op_api_error)
+FROM `wisekeybq.mrload_raw.hubspot_deals_import`
+WHERE op_approve = 'Y'
+ORDER BY company_name, dealname
+```
+
+→ *Save results* → Google Sheets or CSV (local file) → HubSpot **Import**, one file, Deals +
+Companies. Leaving the blank `pipeline` / `dealstage` columns out makes the wizard ask for a
+default pipeline and stage instead of failing on blanks; the `op_approve` filter exports only
+the rows you approved in `deal_decisions.csv`. Mapping (the wizard remembers headers, and the
+HubSpot internal names auto-match): `hs_object_id` → Deals · Record ID (blank = create, filled
+= update), `company_hs_object_id` → Companies · Record ID (the association),
+`dealname` / `amount` / `description` / `mrload_*` auto-match, `company_name` → *Don't import*.
+Companies first when `hubspot_companies_import` has rows (`SELECT name, domain, description,
+mrload_* …`), then `deals-dry` again so `company_hs_object_id` fills. Import the downloaded
+file as is (do not round-trip it through Excel). Steps 1–4 above apply unchanged. The salvaged
+deals need no wizard at all: an approved row whose company was salvaged carries the company id,
+so `deals-live` creates and associates it through the API like any other row (no Cloud Function,
+no second script — see `docs/PASS2_SEQUENCE.md`, *branch point*).
+
+To change the heuristic (minimum PDFs, excluded names) edit
 `context/cards/library.yaml` → `deal_inference` and the matching dbt vars, then `dbt` and
 `review` again — no re-walk.
 
@@ -341,7 +435,7 @@ the three external systems, and cross-checks every artefact:
 | BigQuery | `scripts/e2e/bin/bq` stub (positional + type validation of every load against the schema JSON) and **dbt on DuckDB** | the dbt models and all 34 tests (dialect shims in `dbt/macros/dialect.sql`) |
 
 ```
-scripts/e2e_rehearsal.sh                 # clean tree  → .mrload/rehearsal/REPORT.md, 28 checks
+scripts/e2e_rehearsal.sh                 # clean tree  → .mrload/rehearsal/REPORT.md, 48 checks
 SCENARIO=dirty scripts/e2e_rehearsal.sh  # multi-parent file + duplicate company → STOP at the dbt gate
 MRLOAD_E2E=1 python -m pytest tests/e2e  # both, as a test
 ```
@@ -353,7 +447,14 @@ second attach run fires zero requests). What it cannot prove: Google/HubSpot
 authentication and quotas, BigQuery-only SQL behaviour outside the shimmed
 functions, and the Drive sharing step — those are what `preflight` checks live.
 
-## Two surfaces (Cloud Shell, the notebooks) — what is shared and what is local
+## Three surfaces (notebooks, WezTerm, Cloud Shell) — what is shared and what is local
+
+How the three were brought to the same result, layer by layer, and the probe that closed the
+reconciliation on 2026-09-30: `docs/EXECUTION_SURFACES.md` (narrative) and
+`docs/EXECUTION_SURFACES.xlsx` (Layers L0–L15, Pipeline steps, Remediation R01–R25, Equality
+checks; source `docs/execution_surfaces.yaml`). The documentation set for the next pass is produced
+in a fixed order by the repository skill `pass-sequence` (`.claude/skills/pass-sequence/SKILL.md`).
+The rule that matters day to day:
 
 Every surface runs the same `scripts/run_pass1.sh`, against the same BigQuery project and the
 same Drive, so `walk`, `bq-load`, `dbt` and `review` give the same result anywhere. Local to a
@@ -361,7 +462,10 @@ clone: `.env`, the venv, and `.mrload/` (SQLite ledger, checkpoints, logs). The 
 steps `attach-upload`, `attach-notes` and `deals-live` are idempotent **through the ledger
 only**: a second clone with an empty ledger uploads and creates again. Run them from one surface,
 or copy `.mrload/ledger.sqlite` before switching. `hs-props` and `companies-live` are idempotent
-through HubSpot itself (listing, name search) and are safe from any surface.
+through HubSpot itself (listing, name search) and are safe from any surface. Since `765cd01`
+the HubSpot import files are also in BigQuery (`mrload_raw.hubspot_deals_import` /
+`hubspot_companies_import`), so the wizard's input is shared truth and no longer a file on one
+clone; `deal_decisions.csv` stays local by design — edit it where pass 2 runs.
 
 ## Re-run / refresh semantics
 
@@ -378,9 +482,11 @@ through HubSpot itself (listing, name search) and are safe from any surface.
 .mrload/library_hierarchy.csv   bronze (walk output)          .mrload/ledger.sqlite   idempotency + HubSpot ids
 .mrload/silver_preview.csv      offline 19-col parity          .mrload/cache/          downloaded binaries (disposable)
 .mrload/review/*.csv            your queues + deal decisions   .mrload/logs/           one log per step run
-.mrload/ledger_export/*.csv     step-6 CSVs loaded into BigQuery
+.mrload/ledger_export/*.csv     step-6 CSVs loaded into BigQuery; hubspot_*_import.schema.json = card-derived schemas of the import tables
 .mrload/checkpoints.tsv         one line per step run (ts, step, rc, message) — read by scripts/dev/pipeline_state.sh
 .mrload/review/deal_anchors.csv / deal_documents.csv   inferred deals and their deferred documents (side branch)
+.mrload/review/hubspot_deals_import.csv / hubspot_companies_import.csv   HubSpot Import files (review writes, deals refreshes,
+                                                                          ledger-export regenerates + loads as mrload_raw.hubspot_*_import)
 ```
 
 **Where am I / what is next.** `scripts/dev/pipeline_state.sh` (Task *mr-load: pipeline

@@ -34,7 +34,7 @@ snap() { curl -s "http://127.0.0.1:$P2/__state" >"$R/$1.json"; }
 
 $RUN preflight
 $RUN walk
-$RUNNER ledger-export --ledger "$MRLOAD_LEDGER_PATH" --out-dir "$R/ledger_export" --dataset mrload_raw >/dev/null   # header-only CSVs for the DuckDB sources
+$RUNNER ledger-export --ledger "$MRLOAD_LEDGER_PATH" --out-dir "$R/ledger_export" --dataset mrload_raw --tables-only >/dev/null   # header-only ledger CSVs for the DuckDB sources
 $RUN bq-init
 $RUN bq-load
 $RUN hs-props;        snap hs_after_props
@@ -55,6 +55,7 @@ w = csv.DictWriter(open(p, "w", encoding="utf-8", newline=""), fieldnames=rows[0
 print(f"approved {len(rows)} deal decisions")
 EOF
 $RUN deals-live
+$RUNNER attach --hierarchy "$R/library_hierarchy.csv" --ledger "$MRLOAD_LEDGER_PATH" >"$R/attach_after_salvage.json" 2>/dev/null   # strict pass 1 probe (dry, no checkpoint)
 $RUN ledger-export;   cp dbt/target/run_results.json "$R/dbt_build_final.json"
 $RUN status
 scripts/dev/pipeline_state.sh; scripts/dev/pipeline_state.sh --json >"$R/pipeline_state.json"
