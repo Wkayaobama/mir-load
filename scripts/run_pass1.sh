@@ -18,8 +18,9 @@
 #   attach-dry      3b. row count per company, nothing fired
 #   attach-upload   4b. phase 1: Drive → HubSpot Files                       [gate FILES_UPLOAD]
 #   attach-notes    5b. phase 2: note + association → company                [gate FILE_NOTES_POST]
-#   ledger-export   6.  ledger → CSV → mrload_raw.* + dbt build              [gate BQ_LOAD]
-#   deals-dry       7.  pass 2 dry run from the edited decisions file
+#   ledger-export   6.  ledger → CSV → mrload_raw.* + hubspot_*_import tables + dbt build   [gate BQ_LOAD]
+#   deals-dry       7.  pass 2 dry run from the edited decisions file (salvage persisted);
+#                       then ledger-export → BigQuery console → HubSpot Import, or deals-live (docs/PASS2_SEQUENCE.md)
 #   deals-live      7.  pass 2 create deals + associations                   [gate DEAL_CREATE]
 #   status          ledger + artefact summary
 #   all             preflight → … → ledger-export with a checkpoint before every live gate

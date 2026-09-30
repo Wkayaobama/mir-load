@@ -121,6 +121,7 @@ ledger-export  ledger → mrload_raw.{companies_resolved,files_uploaded,file_not
 deals          pass 2: one deal per approved ANCHOR → company; every PO/Billing note beneath → deal  [MRLOAD_APPROVE_DEAL_CREATE]
                orphan salvage: a year-prefixed company folder's deal is associated to the company found by name (never created);
                every run refreshes hubspot_deals_import.csv / hubspot_companies_import.csv
+               order: review → (edit) → deals-dry → ledger-export → console import | deals-live → ledger-export  (docs/PASS2_SEQUENCE.md)
 unmigrate      delete attached notes from the ledger                          [MRLOAD_APPROVE_UNMIGRATE]
 ```
 
