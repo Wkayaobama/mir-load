@@ -454,7 +454,7 @@ functions, and the Drive sharing step — those are what `preflight` checks live
 
 How the three were brought to the same result, layer by layer, and the probe that closed the
 reconciliation on 2026-09-30: `docs/EXECUTION_SURFACES.md` (narrative) and
-`docs/EXECUTION_SURFACES.xlsx` (Layers L0–L15, Pipeline steps, Remediation R01–R25, Equality
+`docs/EXECUTION_SURFACES.xlsx` (Layers L0–L16, Pipeline steps, Remediation R01–R28, Equality
 checks; source `docs/execution_surfaces.yaml`). The documentation set for the next pass is produced
 in a fixed order by the repository skill `pass-sequence` (`.claude/skills/pass-sequence/SKILL.md`).
 The rule that matters day to day:

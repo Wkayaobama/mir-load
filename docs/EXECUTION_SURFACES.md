@@ -1,8 +1,8 @@
 # Execution surfaces — how the three layers were reconciled (record)
 
 Companion to `docs/EXECUTION_SURFACES.xlsx`, which holds the same material as tables
-(*Overview*, *Layers* L0–L15, *Pipeline steps* 1–19 with the pass-2 wizard route 15b–15c,
-*Remediation* R01–R25, *Equality checks*). The workbook is built from `docs/execution_surfaces.yaml`
+(*Overview*, *Layers* L0–L16, *Pipeline steps* 1–19 with the pass-2 wizard route 15b–15c,
+*Remediation* R01–R28, *Equality checks*). The workbook is built from `docs/execution_surfaces.yaml`
 by the `pass-sequence` skill (`.claude/skills/pass-sequence/`), which also produces this record,
 the `PASS{N}_SEQUENCE.md` pages and, on request, a Polyglot run sheet — edit the YAML, rebuild. This page is the narrative: what diverged between the
 surfaces, how each divergence was observed, what closed it, and the probe that ended the
