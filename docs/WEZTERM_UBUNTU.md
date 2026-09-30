@@ -111,12 +111,17 @@ after a long absence. Sessions stop after 40–60 min idle, so this is for
 interactive runs, not scheduled ones.
 
 Cloud Shell specifics for the review files and pass 2 (everything else is the same commands
-as B): `cloudshell edit .mrload/review/deal_decisions.csv` opens the Cloud Shell Editor,
-`column -s, -t < <file> | less -S` gives an aligned glance, `cloudshell download <file>` and
-the ⋮ → Upload menu round-trip a file to the laptop, and `bq` is preauthenticated, so the
-import tables written by `ledger-export` are probed with `bq query` from the same tab. The
-ordered recipe with those commands in place: `docs/PASS2_SEQUENCE.md`; how this surface was
-reconciled with the other two: `docs/EXECUTION_SURFACES.md`.
+as B): `column -s, -t < <file> | less -S` gives an aligned glance, `nano` edits on any route, and
+`bq` is preauthenticated, so the import tables written by `ledger-export` are probed with
+`bq query` from the same tab. The `cloudshell` verbs are route-dependent: `cloudshell edit <file>`
+(Cloud Shell Editor) and `cloudshell download <file>` + ⋮ → Upload work only in the **browser
+terminal** (console panel, shell.cloud.google.com, the Editor's terminal); over the ssh route above
+they fail with "Cannot send messages to client". The ssh-native pair is
+`gcloud cloud-shell scp cloudshell:~/mir-load/.mrload/review/<file> localhost:.` and the reverse —
+not yet verified on this project. Both routes share `$HOME`, so mixing them is fine. Also keep
+`gcloud config get-value project` equal to `MRLOAD_BQ_PROJECT`: the runner's `bq load` follows it.
+The ordered recipe: `docs/PASS2_SEQUENCE.md`; how this surface was reconciled with the other two:
+`docs/EXECUTION_SURFACES.md`.
 
 ## D. GCE runner VM over IAP (remote; no port 22 exposed)
 

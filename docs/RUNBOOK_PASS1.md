@@ -368,7 +368,10 @@ Idempotent through `ledger.deals_created`, keyed by the anchor's library id; `hs
 there holds the associated note ids, `;`-joined. `deals-dry` / `deals-live` print `!!` lines for
 `failed`, `partial` and `no_company_resolved` rows with the HubSpot error text, so a
 `create_error` (typically a `dealstage` / `pipeline` value that is not a stage id of *this* portal)
-is visible without opening the ledger.
+is visible without opening the ledger. A template text left in `.env` (`MRLOAD_DEAL_STAGE=<stage id>`)
+is such a value: non-empty, so it reaches HubSpot and comes back as a bare 400 — `scripts/dev/env_clinic.sh`
+flags it, and the sandbox ids are tabled in `docs/PASS2_SEQUENCE.md`. A gate kept in `.env` makes
+`deals-dry` live; `MRLOAD_APPROVE_DEAL_CREATE=0 scripts/run_pass1.sh deals-dry` is the true dry run.
 
 **Import path (no API dependency; pipeline and stage are chosen per portal in the wizard).**
 `hubspot_deals_import.csv` has one row per inferred anchor: `Record ID` (filled when the API already

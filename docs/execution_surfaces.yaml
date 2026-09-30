@@ -1,8 +1,8 @@
 title: mr-load — three execution surfaces, one pipeline
 verdict: |-
-  Verdict: from the acquisition of the code to the last step, motion A (zip or clone → VS Code → Polyglot notebooks) yields the same artefacts as motions B (WezTerm → Ubuntu terminal) and C (Cloud Shell), because every step cell runs the same scripts/run_pass1.sh inside an Ubuntu that the same bootstrap provisioned, against the same BigQuery project, Drive root and HubSpot portal. The layers that are NOT parallel are all outside the pipeline itself: acquiring and updating the code (a zip has no git), file modes, package provisioning, and the locality of the SQLite ledger for the live HubSpot steps. Each has a remediation in the Layers sheet. Reconciled through pass 2 on 2026-09-30: the orphan salvage (6f38600) and the BigQuery materialisation of the HubSpot import files (765cd01) were run from Cloud Shell and probed with bq query — the table is the same from every surface. See Layers L14–L15, Pipeline steps 15b–15c, Remediation R21–R25, the last four Equality checks, and docs/EXECUTION_SURFACES.md for the narrative.
+  Verdict: from the acquisition of the code to the last step, motion A (zip or clone → VS Code → Polyglot notebooks) yields the same artefacts as motions B (WezTerm → Ubuntu terminal) and C (Cloud Shell), because every step cell runs the same scripts/run_pass1.sh inside an Ubuntu that the same bootstrap provisioned, against the same BigQuery project, Drive root and HubSpot portal. The layers that are NOT parallel are all outside the pipeline itself: acquiring and updating the code (a zip has no git), file modes, package provisioning, and the locality of the SQLite ledger for the live HubSpot steps. Each has a remediation in the Layers sheet. Reconciled through pass 2 on 2026-09-30: the orphan salvage (6f38600) and the BigQuery materialisation of the HubSpot import files (765cd01) were run from Cloud Shell and probed with bq query — the table is the same from every surface. See Layers L14–L15, Pipeline steps 15b–15c, Remediation R21–R25, the last four Equality checks, and docs/EXECUTION_SURFACES.md for the narrative. The API route was completed the same day: after a .env placeholder was replaced by the sandbox pipeline / stage ids, deals-live created 9 deals in the Miraex pipeline, the 4 salvaged ELTA rows included (L16, R26–R28, three new Equality checks).
 legend: |-
-  Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers L0–L15 are the execution layer subdivided from acquisition to updates; Pipeline steps are the 16 runner steps plus the pass-2 wizard route (15b–15c), status and rollback; Remediation is the catalogue of observed and simulated failures (R01–R25); Equality checks lists what to compare between two surfaces after each stage. Source: the mr-load repository on branch claude/mr-load-library-system-dphpbj at 2026-09-30 (765cd01), the Cloud Shell logs shared on 2026-09-14/15, and simulations run in the development container (non-git folder, in-place conversion, relative state dir).
+  Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers L0–L16 are the execution layer subdivided from acquisition to updates; Pipeline steps are the 16 runner steps plus the pass-2 wizard route (15b–15c), status and rollback; Remediation is the catalogue of observed and simulated failures (R01–R28); Equality checks lists what to compare between two surfaces after each stage. Source: the mr-load repository on branch claude/mr-load-library-system-dphpbj at 2026-09-30 (765cd01), the Cloud Shell logs shared on 2026-09-14/15, and simulations run in the development container (non-git folder, in-place conversion, relative state dir).
 surfaces:
   A: A · Zip / clone → VS Code → Polyglot notebook (PowerShell cells)
   B: B · WezTerm → Ubuntu terminal (WSL or Docker)
@@ -212,14 +212,14 @@ layers:
   B: |-
     column -s, -t < .mrload/review/deal_decisions.csv | less -S (← → scroll, q); edit with nano or VS Code (WSL remote).
   C: |-
-    cloudshell edit .mrload/review/deal_decisions.csv (Cloud Shell Editor, Ctrl+S); or nano; view with column -s, -t < … | less -S; or cloudshell download <file> → edit on the laptop → ⋮ Upload → mv ~/deal_decisions.csv ~/mir-load/.mrload/review/
+    nano on any route. Browser terminal only: cloudshell edit .mrload/review/deal_decisions.csv (Cloud Shell Editor, Ctrl+S) or cloudshell download <file> → edit on the laptop → ⋮ Upload → mv ~/deal_decisions.csv ~/mir-load/.mrload/review/. Over gcloud cloud-shell ssh (WezTerm route) the cloudshell verbs fail ("Cannot send messages to client"): gcloud cloud-shell scp both ways — unverified.
   parity: Conditional
   diverges: |-
-    The file is per clone (L9): edit it on the surface that will run deals-dry / deals-live. Cloud Shell has no desktop editor, hence cloudshell edit or the download/upload round trip. column misaligns a row whose quoted field contains a comma (glance only). The writer emits CRLF; the reader accepts LF, CRLF or a mix, so any editor is fine.
+    The file is per clone (L9): edit it on the surface that will run deals-dry / deals-live. The cloudshell verbs are a messenger to the browser page hosting the terminal, so they need the browser terminal (or a reconnected tab); nano works on every route. column misaligns a row whose quoted field contains a comma (glance only). The writer emits CRLF; the reader accepts LF, CRLF or a mix.
   remediation: |-
     None needed. Bulk approve of every row: sed -i -E '2,$ s/,N,([^,]*)\r?$/,Y,\1/' .mrload/review/deal_decisions.csv (approve is the 15th column, before operator_note). Per-row approval is the point of the file, so prefer the editor.
   verified: |-
-    Cloud Shell run of 2026-09-30: review → edit → deals-dry → ledger-export; the rehearsal flips approve on the same file layout.
+    Cloud Shell runs of 2026-09-30: review → sed/nano → deals-dry → ledger-export; cloudshell download failed over the ssh route (observed), gcloud cloud-shell scp not yet probed.
 - id: L15
   layer: BigQuery materialisation of the HubSpot import files + probe
   A: |-
@@ -235,6 +235,20 @@ layers:
     Console route: BigQuery console → SELECT * EXCEPT(pipeline, dealstage, op_company_status, op_api_status, op_api_error) … WHERE op_approve = 'Y' → Save results → Sheets/CSV → HubSpot Import (hs_object_id → Deals·Record ID, company_hs_object_id → Companies·Record ID). Loader route: deals-live creates and associates the salvaged deals through the API (no Cloud Function needed).
   verified: |-
     Probe of 2026-09-30 on the sandbox (portal 49610528) from Cloud Shell: 10 rows = the 10 inferred anchors; 4 ELTA rows salvaged (op_company_status salvaged, company_hs_object_id 35988056623 found by name, never created); 6 resolved from pass 1; op_approve N and hs_object_id NULL everywhere (no deal created yet). Row for row the content of review/hubspot_deals_import.csv (rehearsal check 47: byte-identical load).
+- id: L16
+  layer: 'Warehouse project: MRLOAD_BQ_PROJECT vs the gcloud default project'
+  A: |-
+    The notebook runs the same script inside Ubuntu: gcloud config of that Ubuntu's ADC decides the default project.
+  B: gcloud config get-value project in the WezTerm tab.
+  C: |-
+    gcloud config get-value project in Cloud Shell — observed at wisekeyclourrun until the operator ran gcloud config set project wisekeybq.
+  parity: Conditional
+  diverges: |-
+    preflight, bq-init pass --project_id="$MRLOAD_BQ_PROJECT" and dbt reads MRLOAD_BQ_PROJECT, but the runner's bq load commands (bq-load, ledger-export) do not pass --project_id: they follow the gcloud default project of that surface. With another project active the load fails on a missing dataset or, if a same-named dataset exists there, lands in the wrong project silently.
+  remediation: |-
+    gcloud config set project $MRLOAD_BQ_PROJECT on every surface (compare with scripts/run_pass1.sh preflight, which prints the project). Proposed, not implemented (awaiting consent): --project_id="$MRLOAD_BQ_PROJECT" on the runner's bq load commands, which turns the row Parallel.
+  verified: |-
+    Prompt of the 2026-09-30 Cloud Shell log; code read (runner.py _bq_load_cmd / cmd_bq_load).
 steps:
 - n: 1
   step: preflight
@@ -378,7 +392,7 @@ steps:
   artefact: |-
     would_create per approved anchor; notes count per deal; companies_resolved *_pass2 statuses persisted (salvage runs in dry mode too)
   notes: |-
-    Reads deal_decisions.csv of that clone (edit it there: L14). Orphan companies are searched by name, never created.
+    Reads deal_decisions.csv of that clone (edit it there: L14). Orphan companies are searched by name, never created. A gate kept in .env makes this dry step LIVE on every surface: prefix MRLOAD_APPROVE_DEAL_CREATE=0 for a true dry run.
 - n: 15b
   step: ledger-export (import tables, wizard route)
   gate: LIVE BQ_LOAD
@@ -412,7 +426,7 @@ steps:
   parity: Conditional
   artefact: ledger deals_created created=N; deal→company and note→deal associations
   notes: |-
-    Ledger-keyed (L9); one deal per inferred anchor. This is the programmatic loader for the salvaged deals too: an approved row whose company was salvaged is created and associated to that company id (no Cloud Function needed). create_error = pipeline / dealstage is not an id of THIS portal (R21).
+    Ledger-keyed (L9); one deal per inferred anchor. This is the programmatic loader for the salvaged deals too: an approved row whose company was salvaged is created and associated to that company id (no Cloud Function needed). create_error = pipeline / dealstage is not an id of THIS portal (R21). 2026-09-30: 10 × create_error 400 caused by <placeholder> ids in .env (R26); after the fix 9 deals created in the Miraex pipeline (portal list), the 4 salvaged ELTA rows among them.
 - n: 17
   step: ledger-export (again)
   gate: LIVE BQ_LOAD
@@ -634,7 +648,7 @@ remediation:
   cause: |-
     No desktop editor; column -s, -t misaligns a row whose quoted field contains a comma.
   fix: |-
-    cloudshell edit <file> (Cloud Shell Editor) or nano to edit; column -s, -t < <file> | less -S for a glance; less -S <file> for the exact text; cloudshell download <file> then ⋮ Upload and mv ~/<file> ~/mir-load/.mrload/review/ for a laptop round trip.
+    nano or vim on any route. Browser terminal only: cloudshell edit <file> (Cloud Shell Editor), cloudshell download <file>, ⋮ Upload then mv ~/<file> ~/mir-load/.mrload/review/. Over gcloud cloud-shell ssh: gcloud cloud-shell scp cloudshell:<path> localhost:. and back (unverified). column -s, -t < <file> | less -S for a glance; less -S <file> for the exact text.
   verified: this session (L14)
 - id: R25
   symptom: |-
@@ -646,6 +660,37 @@ remediation:
   fix: |-
     Before the production walk: add the folder to the exclusions in context/cards/library.yaml, delete the sandbox company, re-run walk → bq-load → dbt → review. Not done yet — flagged from the probe.
   verified: 'probe 2026-09-30 (row 1: company_name Drafts/pre-PO, id 58614964830)'
+- id: R26
+  symptom: |-
+    deals-dry / deals-live: create_error: 400 Client Error on EVERY approved row, salvaged and resolved alike
+  layer: L6
+  surfaces: A B C
+  cause: |-
+    MRLOAD_DEAL_PIPELINE / MRLOAD_DEAL_STAGE in .env held the template text <pipeline id> / <stage id>. Non-empty, so the runner's "dealname and dealstage are required" guard passed; HubSpot rejected the value; the client keeps only the status line, not the body naming the field. Not a scope problem (that is a 403).
+  fix: |-
+    sed -i 's|^MRLOAD_DEAL_PIPELINE=.*|MRLOAD_DEAL_PIPELINE=938985861|; s|^MRLOAD_DEAL_STAGE=.*|MRLOAD_DEAL_STAGE=1445448859|' .env (sandbox Miraex pipeline; ids from GET /crm/v3/pipelines/deals); scripts/dev/env_clinic.sh flags <…> as a placeholder — run it before pass 2; per-row dealstage in deal_decisions.csv. Proposed (awaiting consent): surface HubSpot's error body in create_error.
+  verified: |-
+    Cloud Shell 2026-09-30: cause found with grep/python/curl; 9 deals created after the fix (portal list)
+- id: R27
+  symptom: 'cloudshell download / cloudshell edit: "Cannot send messages to client"'
+  layer: L8
+  surfaces: C
+  cause: |-
+    The cloudshell CLI messages the browser page hosting the terminal. Over gcloud cloud-shell ssh (WezTerm) there is no web client; a disconnected browser tab gives the same error.
+  fix: |-
+    Use the browser terminal (console panel, shell.cloud.google.com, or the Cloud Shell Editor's terminal) or reload the tab; from ssh use nano and gcloud cloud-shell scp both ways (unverified). Both routes share $HOME, so they can be mixed.
+  verified: user log 2026-09-30
+- id: R28
+  symptom: |-
+    bq load in bq-load / ledger-export: Not found: Dataset <other-project>:mrload_raw, or a load into the wrong project
+  layer: L16
+  surfaces: A B C
+  cause: |-
+    The runner's bq load commands pass no --project_id, so they follow gcloud's default project (wisekeyclourrun in the 2026-09-30 log), unlike preflight / bq-init / dbt which use MRLOAD_BQ_PROJECT.
+  fix: |-
+    gcloud config set project $MRLOAD_BQ_PROJECT before the step (preflight prints the project to compare). Proposed, not implemented (awaiting consent): --project_id="$MRLOAD_BQ_PROJECT" on the runner's bq load commands.
+  verified: |-
+    code read + the prompt of the 2026-09-30 log (latent; the operator switched projects before ledger-export)
 equality_checks:
 - stage: after walk
   compare: node count
@@ -729,3 +774,20 @@ equality_checks:
     bq query --use_legacy_sql=false 'SELECT dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id FROM `wisekeybq.mrload_raw.hubspot_deals_import` ORDER BY company_name, dealname'
   expected: |-
     hs_object_id filled and op_api_status = created on the rows deals-live created; the same query on every surface
+- stage: before deals-dry
+  compare: .env placeholders
+  A: Invoke-Ubuntu 'scripts/dev/env_clinic.sh'
+  BC: scripts/dev/env_clinic.sh
+  expected: |-
+    no line 'holds a template placeholder'; MRLOAD_DEAL_PIPELINE / MRLOAD_DEAL_STAGE are portal ids or empty (2026-09-30: <stage id> → 400 on every row)
+- stage: after deals-live
+  compare: deals in the portal vs the ledger
+  A: Invoke-Ubuntu 'scripts/run_pass1.sh status'
+  BC: scripts/run_pass1.sh status; the portal's deal list filtered on the pipeline
+  expected: |-
+    ledger deals_created created=N == N deals in the pipeline (2026-09-30: 9 in Miraex, 2 Closed Won, Drafts/pre-PO absent)
+- stage: any time
+  compare: gcloud default project
+  A: Invoke-Ubuntu 'gcloud config get-value project'
+  BC: gcloud config get-value project
+  expected: == MRLOAD_BQ_PROJECT on every surface (bq-load / ledger-export follow it)

@@ -12,6 +12,9 @@ commands. Nothing below is specific to Cloud Shell except the four `cloudshell` 
   `scripts/dev/pipeline_state.sh` shows 14 steps done and the `mrload_*` deal properties exist
   in the portal.
 - `.env` points at the **sandbox** token and portal `49610528` (`scripts/dev/env_clinic.sh`).
+- `MRLOAD_DEAL_PIPELINE` / `MRLOAD_DEAL_STAGE` in `.env` hold ids of *this* portal or are empty — never a
+  template text such as `<stage id>`: any non-empty value is sent to HubSpot and rejected with a 400 that
+  names no field. The clinic flags `<…>` values as placeholders; run it before pass 2.
 - The live HubSpot steps of pass 1 ran from *this* clone, or its `.mrload/ledger.sqlite` was
   copied here: pass 2 associates through that ledger.
 
@@ -28,12 +31,17 @@ column -s, -t < .mrload/review/deal_decisions.csv | less -S     # aligned; ← �
 column -s, -t < .mrload/review/deal_anchors.csv   | less -S     # a quoted comma misaligns that row: a glance, not a proof
 
 # ── edit (pick one) ───────────────────────────────────────────────────────────────────────
-cloudshell edit .mrload/review/deal_decisions.csv               # Cloud Shell Editor pane; set approve=Y, dealname, amount; Ctrl+S
-nano .mrload/review/deal_decisions.csv                          # terminal; Ctrl+O Enter Ctrl+X
+nano .mrload/review/deal_decisions.csv                          # terminal, any route; Ctrl+O Enter Ctrl+X
+cloudshell edit .mrload/review/deal_decisions.csv               # BROWSER TERMINAL ONLY: opens the Cloud Shell Editor pane; Ctrl+S
 sed -i -E '2,$ s/,N,([^,]*)\r?$/,Y,\1/' .mrload/review/deal_decisions.csv   # approve EVERY row (approve = 15th column, before operator_note)
-cloudshell download .mrload/review/deal_decisions.csv           # or edit on the laptop (VS Code, Rainbow CSV), then ⋮ → Upload
+cloudshell download .mrload/review/deal_decisions.csv           # BROWSER TERMINAL ONLY: laptop round trip (VS Code, Rainbow CSV), then ⋮ → Upload
 mv ~/deal_decisions.csv ~/mir-load/.mrload/review/              #   the upload lands in $HOME; put it back
+#   from a WezTerm `gcloud cloud-shell ssh` session the cloudshell verbs fail ("Cannot send messages to client"); the
+#   ssh-native pair — NOT YET VERIFIED on this project — is:
+#   gcloud cloud-shell scp cloudshell:~/mir-load/.mrload/review/deal_decisions.csv localhost:.        (laptop side)
+#   gcloud cloud-shell scp localhost:deal_decisions.csv cloudshell:~/mir-load/.mrload/review/         (back)
 
+MRLOAD_APPROVE_DEAL_CREATE=0 scripts/run_pass1.sh deals-dry      # a TRUE dry run even when the gate sits in .env (process env wins)
 scripts/run_pass1.sh deals-dry        # salvage: each orphan company searched by name → salvaged (id) or missing_in_portal,
                                       #          persisted in the ledger even though the step is dry; failed rows print their reason;
                                       #          the two CSVs are refreshed with this run's results
@@ -71,7 +79,7 @@ scripts/run_pass1.sh ledger-export
 
 The one prerequisite is a valid **pipeline and stage id of the portal the token belongs to**
 (sandbox ids differ from production). A `failed` row with `create_error` is that prerequisite
-missing. Read the ids once:
+missing — or, as on 2026-09-30, a template text left in `.env`. Read the ids once:
 
 ```bash
 set -a; source .env; set +a
@@ -82,7 +90,41 @@ for p in json.load(sys.stdin)["results"]:
 ```
 
 and put them in `deal_decisions.csv` (`pipeline`, `dealstage`) or in `MRLOAD_DEAL_PIPELINE` /
-`MRLOAD_DEAL_STAGE`.
+`MRLOAD_DEAL_STAGE`. For the sandbox the defaults used on 2026-09-30 were the **Miraex** pipeline:
+
+```bash
+sed -i 's|^MRLOAD_DEAL_PIPELINE=.*|MRLOAD_DEAL_PIPELINE=938985861|; s|^MRLOAD_DEAL_STAGE=.*|MRLOAD_DEAL_STAGE=1445448859|' .env
+scripts/dev/env_clinic.sh        # no placeholder left
+```
+
+| Miraex pipeline `938985861` | stage id |
+|---|---|
+| 01 - Identification (default for inferred deals) | `1445448859` |
+| 02 - Qualifiée | `1445448860` |
+| 03 - Evaluation technique | `1445448861` |
+| 04 - Construction propositions | `1445448862` |
+| 05 - Négociations | `1445448863` |
+| Design Win | `1445448864` |
+| Closed Won | `1445448865` |
+| Closed Dead | `1445448866` |
+
+Per-row overrides go in the `dealstage` column; this one-liner sends received POs to Closed Won and
+withdraws the working folder (a business choice, shown as run, not as a rule):
+
+```bash
+python3 - <<'EOF'
+import csv, re
+p = ".mrload/review/deal_decisions.csv"
+rows = list(csv.DictReader(open(p, encoding="utf-8-sig"))); cols = rows[0].keys()
+for r in rows:
+    if re.search(r"\bPO\b|Billing", r["deal_name"], re.I): r["dealstage"] = "1445448865"
+    if r["company_name"].startswith("Drafts/pre-PO"):      r["approve"]   = "N"
+w = csv.DictWriter(open(p, "w", encoding="utf-8", newline=""), fieldnames=cols); w.writeheader(); w.writerows(rows)
+EOF
+```
+
+`\bPO\b` does not match `_PO` (underscore is a word character), so `20251124_PO 99-250335` stayed at
+Identification on 2026-09-30; widen the pattern or set the stage in the editor.
 
 **Wizard route — no API.** The BigQuery console is the file transfer: run the query the step
 printed, then *Save results* → Google Sheets or CSV → HubSpot **Import**, one file, Deals +
@@ -158,7 +200,41 @@ everywhere: nothing is created yet, which is what the table should say before an
 The rows are the content of `review/hubspot_deals_import.csv` of the clone that ran
 `ledger-export` (rehearsal check 47 loads the file byte-identically).
 
+## Evidence 2 — the API route, 2026-09-30 (sandbox, from Cloud Shell)
+
+First attempt, `deals-dry` (live, the gate being in `.env`), ten approved rows:
+
+```
+{'failed': 10}
+  !! ELTA - 10 Communication_Meeting              failed               salvaged           create_error: 400 Client Error: Bad Request for url: https://api.hubapi.com/crm/v3/objects/deals
+  … (ten identical lines)
+  → create_error: HubSpot refused the deal — a dealstage/pipeline value must be the STAGE/PIPELINE ID of THIS portal (GET /crm/v3/pipelines/deals)
+```
+
+Cause, found with the three look commands: `grep -n "^MRLOAD_DEAL_" .env` printed
+`MRLOAD_DEAL_PIPELINE=<pipeline id>` and `MRLOAD_DEAL_STAGE=<stage id>`; the approved rows carried
+`('', '', '')` for pipeline, stage and amount; `GET /crm/v3/pipelines/deals` listed eleven pipelines,
+among them `938985861 Miraex` with the stages of the table above. A `<…>` value is non-empty, so the
+runner's "dealname and dealstage are required" guard let it through; the error body that would have
+named the field is not kept by the client (a 400 is not a scope problem — that would be a 403).
+`set -a; source .env` also fails on such a line (`<` is a redirection to bash).
+
+After the `.env` fix and the per-row overrides: `deals-live` created nine deals in the Miraex pipeline,
+confirmed in the portal's deal list — two at *Closed Won* with the close date of the run (MEMQ, ELTA -
+30 Offer, PO, Order Confirmation, Invoice), seven at *01 - Identification* (Pixel Photonics ×2,
+Quantinuum - references, Huber-Suhner, ELTA ×3), no owner, no amount; `Drafts/pre-PO` absent
+(approve=N). The post-run `ledger-export` and the table probe with `hs_object_id` filled were not
+captured in this record; run the probe query above to complete it.
+
 ## Pitfalls
+
+- **A template text in `.env` is a value.** `<stage id>` passes the required-field guard and HubSpot
+  answers 400 without a visible reason. Empty is safe; `scripts/dev/env_clinic.sh` flags `<…>`.
+- **The `cloudshell` verbs need the browser terminal.** From a `gcloud cloud-shell ssh` session they end
+  with "Cannot send messages to client"; `nano` works everywhere, `gcloud cloud-shell scp` is the ssh
+  pair (to verify). A disconnected browser tab gives the same message: reload it.
+- **A gate kept in `.env` makes the dry step live on every surface**, notebook included. Prefix the
+  command with `MRLOAD_APPROVE_<GATE>=0` for a true dry run.
 
 - **The tables hold persisted ledger state.** A `deals-dry` outcome such as `would_create` is not
   in them; `deals-dry` remains the pre-flight view.

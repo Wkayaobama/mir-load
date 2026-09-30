@@ -49,13 +49,16 @@ artefact may be trusted.
 | 2026-09-28 | Pass 2 on Cloud Shell: `no_company_resolved: 4`, `failed: 6`. | `deals-dry` summary. The 4 were anchors under year-prefixed company folders (`2021_ELTA`), never resolved by pass 1; the 6 were `create_error`. | `6f38600`: orphan salvage (search by name, never create; strict pass 1, salvaged companies visible to pass 2 only) and the HubSpot-Import-ready CSVs; rehearsal 48/48; R22. `create_error` → R21 (stage ids of the portal). |
 | 2026-09-28 | The import CSVs live on the Cloud Shell VM, out of reach of the HubSpot wizard; each surface would hold its own copy. | Operator observation. | `765cd01`: `ledger-export` regenerates the two files from ledger + `deal_decisions.csv` and loads them as `mrload_raw.hubspot_deals_import` / `hubspot_companies_import` (snake_case, HubSpot internal names on the head columns, `op_*` bookkeeping, card types); rehearsal 50/50; the side branch fast-forwarded into the working branch on 2026-09-29; L15, R23. |
 | 2026-09-30 | Was a further loader needed for the salvaged deals (Cloud Function, native script)? | The probe below, run from Cloud Shell. | No. `deals-live` already creates and associates salvaged deals through the API; the table is the mirror and the wizard's input, not a second loader. Recorded in `docs/PASS2_SEQUENCE.md`. |
+| 2026-09-30 | The API route failed on every approved row: `create_error: 400 Bad Request` ×10, salvaged and resolved alike. | `deals-dry` (live, gate in `.env`) on Cloud Shell; then `grep MRLOAD_DEAL_ .env` → `<pipeline id>` / `<stage id>`, rows blank, `GET /crm/v3/pipelines/deals` listing the sandbox ids. | Operator fix, no code: `.env` set to the Miraex pipeline `938985861` / stage `1445448859`, per-row overrides, `Drafts/pre-PO` withdrawn; `deals-live` created 9 deals (portal list, 2 Closed Won). Docs: R26, sequence page *Evidence 2*. `env_clinic.sh` already flags `<…>`. **Proposed, not implemented, awaiting consent:** keep HubSpot's error body in `create_error`. |
+| 2026-09-30 | `cloudshell download` failed: "Cannot send messages to client". | Same session. | Documentation error corrected: the `cloudshell` verbs talk to the browser terminal's web client and do not work over `gcloud cloud-shell ssh` (the WezTerm route). `nano` everywhere; the ssh pair `gcloud cloud-shell scp` is written down **unverified**; L14, R24, R27. |
+| 2026-09-30 | The shell's gcloud project was `wisekeyclourrun` until the operator switched it. | The prompt in the same log. | `bq-init` and `preflight` pass `--project_id`; the runner's `bq load` (`bq-load`, `ledger-export`) does not and follows the gcloud default project, so `.env` alone does not make the warehouse shared truth. New layer L16, R28. **Proposed, not implemented, awaiting consent:** `--project_id="$MRLOAD_BQ_PROJECT"` on the runner's `bq load` commands. |
 
 ## 4. Pass 2 on each surface, after the reconciliation
 
 | Operation | A · notebook | B · WezTerm | C · Cloud Shell | Parity |
 |---|---|---|---|---|
 | View `deal_decisions.csv` | VS Code on the clone (Rainbow CSV); `Invoke-Ubuntu 'column -s, -t < .mrload/review/deal_decisions.csv'` | `column -s, -t < … \| less -S` | same as B; or `cloudshell edit` (read) | Parallel |
-| Edit it | VS Code | `nano`, VS Code (WSL remote) | `cloudshell edit .mrload/review/deal_decisions.csv`; `nano`; or `cloudshell download` → edit → ⋮ Upload → `mv ~/deal_decisions.csv ~/mir-load/.mrload/review/` | Conditional: per clone (L9) |
+| Edit it | VS Code | `nano`, VS Code (WSL remote) | `nano` on any route; in the **browser terminal only**: `cloudshell edit …`, or `cloudshell download` → edit → ⋮ Upload → `mv ~/deal_decisions.csv ~/mir-load/.mrload/review/`; over `gcloud cloud-shell ssh`: `gcloud cloud-shell scp` both ways (unverified) | Conditional: per clone (L9) |
 | Bulk approve | — | `sed -i -E '2,$ s/,N,([^,]*)\r?$/,Y,\1/' …` | same | Parallel |
 | `deals-dry`, `ledger-export`, `deals-live` | `Invoke-Step '<step>'` | `scripts/run_pass1.sh <step>` | same | Parallel / Conditional (ledger) |
 | Probe the import tables | `Invoke-Ubuntu 'bq query …'` | `bq query --use_legacy_sql=false '…'` | same, `bq` preauthenticated | Parallel |
@@ -99,6 +102,28 @@ What it proves, surface by surface:
 - **The loader question is settled.** An approved ELTA row goes through `deals-live` like any
   other; the table needs no consumer of its own.
 
+## 5b. The API route, same day (2026-09-30, sandbox 49610528, Cloud Shell)
+
+First run: ten approved rows, ten `create_error: 400 Client Error: Bad Request` — salvaged and resolved
+alike, so the company side was fine. `.env` held `MRLOAD_DEAL_PIPELINE=<pipeline id>` and
+`MRLOAD_DEAL_STAGE=<stage id>`: non-empty, so the runner's required-field guard passed and HubSpot
+rejected the value; the client discards the body that names the field. `GET /crm/v3/pipelines/deals`
+listed the sandbox's eleven pipelines, `938985861 Miraex` among them (stages `1445448859` … `1445448866`).
+
+After `sed` on `.env`, a per-row override (received POs → Closed Won) and `approve=N` on
+`Drafts/pre-PO`: `deals-live` created **nine deals in the Miraex pipeline**, confirmed in the portal's
+deal list — MEMQ and *ELTA - 30 Offer, PO, Order Confirmation, Invoice* at Closed Won with the run's
+close date, Pixel Photonics ×2, Quantinuum - references, Huber-Suhner and ELTA ×3 at 01 - Identification,
+no owner, no amount. The four ELTA deals are the salvaged ones: the API route loads them like any
+other row, which is what the loader question of §3 predicted. Not yet captured: the `ledger-export`
+that follows and the table probe showing `hs_object_id` filled.
+
+What it adds to the surface picture: a placeholder in `.env` is invisible to the runner's own checks
+and to a bare 400; `scripts/dev/env_clinic.sh` sees it (`<…>` is in its placeholder pattern), which
+makes the clinic a precondition of pass 2, not only of setup. And `cloudshell download`, tried in the
+same session, failed because the terminal was not the browser one — the verbs the sequence page
+recommended were route-dependent without saying so.
+
 ## 6. What stays open (none of it blocks pass 2)
 
 - The four attach fixes (Drive export `403` fallback, upload timeout, `download_error` label,
@@ -106,7 +131,15 @@ What it proves, surface by surface:
   awaiting explicit consent.
 - `Drafts/pre-PO`: a working folder classified as a company folder and created in the sandbox
   (R25). Exclude it in the card and delete the sandbox company before the production walk.
-- Valid sandbox pipeline and stage ids for the API route (R21).
+- Keep HubSpot's error body in `create_error` (and the company / note errors) so a 400 names its
+  field — **proposed, not implemented, awaiting consent**.
+- `--project_id="$MRLOAD_BQ_PROJECT"` on the runner's `bq load` commands (L16, R28) — **proposed,
+  not implemented, awaiting consent**.
+- `gcloud cloud-shell scp` as the file round trip over the ssh route — written down, **not yet probed**.
+- The post-run `ledger-export` and table probe with `hs_object_id` filled — to capture.
+- Two Pixel Photonics deals stayed at Identification because `\bPO\b` does not match `_PO`; and
+  *Quantinuum - references* is a deal only if the operator says so — both are stage/approval decisions
+  in HubSpot or in `deal_decisions.csv`, not pipeline work.
 - A `ledger-import` step rebuilding a clone's SQLite ledger from the four `mrload_raw` tables
   would remove the last Conditional on the live steps (L9); not built.
 - StackSync as an alternative loader from `hubspot_deals_import` (match on `hs_object_id`):

@@ -48,6 +48,18 @@ mirror and the wizard's input, not a second loader. A Cloud Function would fork 
 its own secret, miss the ledger and invert the data flow. Written into the sequence page's branch
 point and the record's timeline instead of built.
 
+## Follow-up the same day (API route)
+
+`deals-dry` (live, gate in `.env`) returned `create_error: 400` on all ten rows. Three look commands
+found the cause in minutes: `.env` held `<pipeline id>` / `<stage id>`, non-empty template text that
+passed the required-field guard. `sed` on `.env` with the sandbox Miraex ids (`938985861`, stage
+`1445448859`), a per-row override for received POs, `approve=N` on the working folder, then
+`deals-live`: nine deals in the portal, the four salvaged ELTA rows included. Recorded as R26–R28,
+L16, *Evidence 2* of the sequence page and three timeline rows — with two proposals left explicitly
+unimplemented (error body in `create_error`, `--project_id` on `bq load`) and one route (`gcloud
+cloud-shell scp`) written down as unverified. That is the shape of a follow-up: fix by the operator,
+evidence verbatim, code changes proposed not smuggled.
+
 ## Numbers worth pinning in a new project
 
 - The rehearsal check count (a test asserts it; the setup notebook quotes it — the stale copy is

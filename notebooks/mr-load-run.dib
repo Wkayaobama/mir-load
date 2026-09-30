@@ -43,6 +43,7 @@ review, the dry steps, `hs-props`, `companies-live`) is safe to repeat from eith
 - A step counts as done only if its last successful run is newer than every step before it. Re-running `walk` makes 3–14 pending again. That is intended.
 - A LIVE step first re-runs its dry counterpart, then fires. In this notebook a LIVE cell is refused until `$ConfirmLive = $true`; with it set, `YES_ALL=1` answers the runner's prompts, so the flag is your confirmation.
 - Anything that stops the run (dbt FAIL, ambiguous company names, `type_mismatch`, a 403) is recorded as `failed` and stays the next step until it passes.
+- A gate written into `.env` (`MRLOAD_APPROVE_*=1`) makes the *dry* step live on every surface, `$ConfirmLive` notwithstanding: keep gates out of `.env`, or run the dry step as `Invoke-Ubuntu 'MRLOAD_APPROVE_DEAL_CREATE=0 scripts/run_pass1.sh deals-dry'`. A `<placeholder>` left in `.env` is a value too (`scripts/dev/env_clinic.sh` flags it).
 
 #!mermaid
 

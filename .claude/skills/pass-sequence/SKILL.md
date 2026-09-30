@@ -43,6 +43,10 @@ Gather these facts; every artefact below is a projection of them.
 - **The branch points.** Where an operator chooses between two legitimate routes (API loader
   versus import wizard; live versus dry) — a branch point is documented, not replaced by a new
   tool.
+- **The environment's view.** Run the env clinic (or read `.env` with values masked) before documenting
+  a pass: a template text such as `<stage id>` is a non-empty value that passes required-field guards
+  and produces an error with no field name. Record which surface-specific verbs are route-dependent
+  (a browser-terminal messenger versus an ssh session) instead of listing them as "the Cloud Shell way".
 - **The state machine's view.** What `pipeline_state.sh` (or its equivalent) says about the order
   you are about to document: does a step run out of the canonical order make others stale? Does
   its "next" hint know the branch route? Say so in the docs instead of changing the hint.

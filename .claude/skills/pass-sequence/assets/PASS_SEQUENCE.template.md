@@ -11,6 +11,7 @@ surfaces were brought to the same result. Notebook users run the same steps as
 - Pass {N-1} is complete there: {steps} done, so `{state command}` shows {count} steps done.
 - `.env` points at the **sandbox** token and portal `{portal id}` ({env clinic command}).
 - {Ledger locality rule: the live steps of pass N-1 ran from this clone, or its ledger was copied here.}
+- {No template placeholder in `.env`: a `<…>` value is non-empty and reaches the API; the env clinic flags it.}
 
 ## The sequence
 
