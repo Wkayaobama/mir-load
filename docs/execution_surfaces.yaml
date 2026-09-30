@@ -1,0 +1,731 @@
+title: mr-load — three execution surfaces, one pipeline
+verdict: |-
+  Verdict: from the acquisition of the code to the last step, motion A (zip or clone → VS Code → Polyglot notebooks) yields the same artefacts as motions B (WezTerm → Ubuntu terminal) and C (Cloud Shell), because every step cell runs the same scripts/run_pass1.sh inside an Ubuntu that the same bootstrap provisioned, against the same BigQuery project, Drive root and HubSpot portal. The layers that are NOT parallel are all outside the pipeline itself: acquiring and updating the code (a zip has no git), file modes, package provisioning, and the locality of the SQLite ledger for the live HubSpot steps. Each has a remediation in the Layers sheet. Reconciled through pass 2 on 2026-09-30: the orphan salvage (6f38600) and the BigQuery materialisation of the HubSpot import files (765cd01) were run from Cloud Shell and probed with bq query — the table is the same from every surface. See Layers L14–L15, Pipeline steps 15b–15c, Remediation R21–R25, the last four Equality checks, and docs/EXECUTION_SURFACES.md for the narrative.
+legend: |-
+  Legend: Parity column colours — green Parallel, yellow Conditional, orange Divergent. Layers L0–L15 are the execution layer subdivided from acquisition to updates; Pipeline steps are the 16 runner steps plus the pass-2 wizard route (15b–15c), status and rollback; Remediation is the catalogue of observed and simulated failures (R01–R25); Equality checks lists what to compare between two surfaces after each stage. Source: the mr-load repository on branch claude/mr-load-library-system-dphpbj at 2026-09-30 (765cd01), the Cloud Shell logs shared on 2026-09-14/15, and simulations run in the development container (non-git folder, in-place conversion, relative state dir).
+surfaces:
+  A: A · Zip / clone → VS Code → Polyglot notebook (PowerShell cells)
+  B: B · WezTerm → Ubuntu terminal (WSL or Docker)
+  C: C · Cloud Shell terminal
+motions:
+- motion: A · Zip / clone → VS Code → Polyglot notebook
+  acquire: 'Download ZIP (least optimal: no .git) or VS Code Git: Clone into a chosen path'
+  ubuntu: WSL distro or Docker image (compass notebook provisions it)
+  driver: 'PowerShell cells: Invoke-Step → wsl.exe / docker run → scripts/run_pass1.sh'
+  state: 'the clone the route uses: WSL ~/mir-load or the Windows folder'
+  assessment: |-
+    Best guided path; zip variant acceptable only after in-place conversion to a clone
+- motion: B · WezTerm → Ubuntu terminal
+  acquire: git clone (WSL side or Windows for Docker)
+  ubuntu: same WSL distro or Docker image as A
+  driver: type scripts/run_pass1.sh <step>; live steps ask YES
+  state: same clone as A when the same distro/folder is used
+  assessment: Same result as A with fewer moving parts; no notebook prerequisites
+- motion: C · Cloud Shell
+  acquire: git clone in the persistent home
+  ubuntu: Cloud Shell VM (gcloud/bq built in; run the bootstrap for the venv)
+  driver: type scripts/run_pass1.sh <step>
+  state: ~/mir-load/.mrload in the persistent home
+  assessment: |-
+    Preferred for probing: zero local setup, same code; watch package provisioning (L4) and ledger locality (L9)
+layers:
+- id: L0
+  layer: Acquire the code
+  A: |-
+    GitHub → Download ZIP of the branch → extract to e.g. C:\Users\ayaobama\Documents\AnthonySalesOps\Codebase\miraex\mir-load (no .git, no history, exec bits dropped by Explorer). Alternative on the same motion: VS Code → Git: Clone into that folder.
+  B: |-
+    git clone https://github.com/Wkayaobama/mir-load.git — on the Linux side (~/mir-load) for WSL, on Windows for Docker.
+  C: |-
+    git clone https://github.com/Wkayaobama/mir-load.git ~/mir-load in the persistent home.
+  parity: Divergent
+  diverges: |-
+    A zip is a snapshot without .git: no branch, no git pull, no pre-commit guard, no exec bits after a Windows extraction. Clone variants of A are Parallel with B and C.
+  remediation: |-
+    Convert the folder into a clone IN PLACE (keeps .env and .mrload/): git init && git remote add origin … && git fetch origin <branch> && git reset --hard origin/<branch> && scripts/dev/install_git_hooks.sh. scripts/dev/env_clinic.sh prints this recipe when it finds no .git.
+  verified: |-
+    Simulated in this session: unzipped folder → convert → branch, exec bits and hook restored, working tree clean, .env kept.
+- id: L1
+  layer: Pick the commit
+  A: |-
+    Zip = HEAD of the branch at download time; drifts silently afterwards (the FK fix 953f6f4 and the log-path fix d4d5dfb would be missing from an older zip).
+  B: |-
+    git fetch origin && git checkout claude/mr-load-library-system-dphpbj && git pull
+  C: same as B
+  parity: Conditional
+  diverges: |-
+    Same result only if all surfaces are on the same commit. Symptom of drift: the dbt run builds 6 models instead of 7, review has no deal_anchors.csv.
+  remediation: |-
+    Compare git log -1 on each surface (after conversion on A). Re-download or git pull. scripts/dev/pipeline_state.sh does not know about commits: check the model count in the dbt output (PASS=7).
+  verified: |-
+    Observed on the user's Cloud Shell: 6-model run and per-PDF decisions = pre-merge code.
+- id: L2
+  layer: Line endings and file modes
+  A: |-
+    GitHub zip content is LF. Windows extraction drops the executable bit: harmless on /mnt/c (WSL drvfs shows 777) and on Docker bind mounts, breaks a Linux-side COPY of the folder (Permission denied on scripts/run_pass1.sh).
+  B: .gitattributes pins LF on clone; modes come from the index.
+  C: 'Linux clone: LF and modes from the index.'
+  parity: Conditional
+  diverges: |-
+    Only the zip motion can lose modes; only a Windows checkout without .gitattributes can be CRLF.
+  remediation: |-
+    scripts/dev/crlf_check.sh (scans the tree when there is no git index); chmod +x scripts/*.sh scripts/dev/*.sh scripts/e2e/bin/*; or the in-place conversion, which restores modes.
+  verified: 'Verified: chmod -x then git reset --hard restored -rwxr-xr-x.'
+- id: L3
+  layer: Ubuntu runtime
+  A: |-
+    WSL distro (compass A1) or Docker image built from scripts/dev/Dockerfile (compass B2). The notebook reaches it with wsl.exe -d <distro> -e bash -lc … or docker run --rm -v <clone>:/work … bash -lc ….
+  B: |-
+    The same WSL distro or Docker image, opened as a WezTerm tab (wezterm/mr-load.lua) or scripts/ubuntu_shell.sh.
+  C: |-
+    Cloud Shell VM (Debian-based, gcloud and bq preinstalled, home persists, VM ephemeral).
+  parity: Parallel
+  diverges: |-
+    A and B share the very same Ubuntu. C is a different distribution with the same tools; the bootstrap script handles both.
+  remediation: |-
+    bash scripts/bootstrap_ubuntu.sh --no-rehearsal on every Ubuntu (A4 in the compass for WSL; the Dockerfile for Docker; once in Cloud Shell).
+  verified: 'bootstrap_ubuntu.sh guards: refuses Git Bash/PowerShell and sudo.'
+- id: L4
+  layer: Python and dbt provisioning
+  A: |-
+    WSL: .venv from the bootstrap. Docker: /opt/venv baked into the image. Same requirements files.
+  B: Same as A (same Ubuntu).
+  C: |-
+    Observed: packages in ~/.local (pip --user, python3.12) rather than a venv; same requirements files, versions resolved on a different day.
+  parity: Conditional
+  diverges: |-
+    Version drift is possible because requirements pin lower bounds (dbt-bigquery>=1.10). Behaviour is the same unless a dbt minor release changes something.
+  remediation: |-
+    Use the bootstrap everywhere → .venv; source .venv/bin/activate each session; compare dbt --version and pip freeze | grep -E 'dbt|duckdb' across surfaces; pin exact versions if a difference ever shows.
+  verified: The notebook verify cells (A5/B4) print the versions.
+- id: L5
+  layer: Google credentials (Drive + BigQuery)
+  A: |-
+    scripts/gauth.sh in a terminal opened by Open-UbuntuTerminal; ADC lands in ~/.config/gcloud of the distro or in the mrload-gcloud Docker volume.
+  B: scripts/gauth.sh in the WezTerm tab (same ADC location as A).
+  C: |-
+    scripts/gauth.sh too: Cloud Shell's built-in credentials carry the cloud-platform scope, not Drive.
+  parity: Parallel
+  diverges: |-
+    Same script, same sequence (gcloud auth login --enable-gdrive-access --update-adc, quota project, API enablement). Only the Google identity can differ.
+  remediation: |-
+    scripts/dev/auth_check.sh on each surface: same masked account, 'Drive: scope root readable', 'BigQuery: query OK'.
+  verified: The rejected --scopes variant is documented in gauth.sh and the runbook.
+- id: L6
+  layer: .env and secrets
+  A: |-
+    Set-EnvKey <KEY> (masked Read-Host) pipes the value into scripts/dev/env_set.sh inside Ubuntu; nothing is stored in the notebook (.dib keeps no outputs).
+  B: |-
+    scripts/dev/env_set.sh KEY (silent prompt) or an editor; scripts/dev/env_clinic.sh --fix.
+  C: Same as B.
+  parity: Parallel
+  diverges: |-
+    .env is per clone: three copies to keep aligned (MRLOAD_BQ_PROJECT, HUBSPOT_SANDBOX_TOKEN, HUBSPOT_SANDBOX_PORTAL_ID).
+  remediation: |-
+    scripts/dev/env_clinic.sh on each surface; it masks values and flags placeholders, CRLF, mode and the production portal.
+  verified: env_clinic tested in repo and on a non-git folder.
+- id: L7
+  layer: Git safety net (no secret ever committed)
+  A: |-
+    Zip: there is no git, so nothing can be committed from that folder; the clinic says so as a warning and prints the conversion recipe. Clone: install_git_hooks.sh + guard_proof.sh as on B/C.
+  B: |-
+    scripts/dev/install_git_hooks.sh; scripts/dev/guard_proof.sh (force-stages .env, commit must be refused).
+  C: Same as B.
+  parity: Divergent
+  diverges: |-
+    The guard exists only where .git exists. On the zip motion the risk appears the day the folder is turned into a repo.
+  remediation: |-
+    Convert in place, then install_git_hooks.sh; the .gitignore already excludes .env, .env.*, .mrload/.
+  verified: Hook refusal verified for a staged .env and a fake service-account key.
+- id: L8
+  layer: Driving a step
+  A: |-
+    Invoke-Step '<step>' → scripts/run_pass1.sh <step> inside Ubuntu; LIVE steps refused until $ConfirmLive = $true, then YES_ALL=1 answers the runner's prompts. Invoke-Sequence -UntilLive / -Through and Invoke-NextStep chain steps in order.
+  B: |-
+    scripts/run_pass1.sh <step>; LIVE steps show the dry run and ask you to type YES.
+  C: Same as B.
+  parity: Parallel
+  diverges: |-
+    Identical script, gates, logs and checkpoints. The only mechanical differences: prompts vs $ConfirmLive, and wsl.exe output encoding (helpers set WSL_UTF8=1).
+  remediation: |-
+    None needed. If notebook output looks like g.a.r.b.l.e.d, re-run the Switches cell (sets WSL_UTF8).
+  verified: |-
+    Run sheet exercised on the linux route: refusal, failed checkpoint, sequence halt, next step.
+- id: L9
+  layer: 'State: ledger, checkpoints, cache'
+  A: .mrload/ of the clone the route uses (WSL clone or Windows clone).
+  B: |-
+    .mrload/ of the WezTerm clone (the same clone as A when the same WSL distro / Windows folder is used).
+  C: .mrload/ of the Cloud Shell clone.
+  parity: Divergent
+  diverges: |-
+    attach-upload, attach-notes and deals-live are idempotent only through the SQLite ledger of the clone that ran them. A second clone with an empty ledger uploads and creates again (duplicate files, notes, deals).
+  remediation: |-
+    Run the live HubSpot steps from ONE surface, or copy .mrload/ledger.sqlite before switching. Proper fix (not built): a ledger-import step rebuilding the SQLite ledger from the four mrload_raw tables written by ledger-export.
+  verified: Rule added to the run sheet and the runbook (de03946).
+- id: L10
+  layer: Logs and 'where am I'
+  A: Get-PipelineState, Invoke-Ubuntu 'scripts/dev/last_log.sh'.
+  B: |-
+    scripts/dev/pipeline_state.sh; scripts/dev/last_log.sh; task 'mr-load: pipeline state'.
+  C: Same as B.
+  parity: Parallel
+  diverges: |-
+    Same files, but per clone (L9). Before d4d5dfb the dbt step lost its logs and checkpoint on every surface with a relative state dir.
+  remediation: git pull (d4d5dfb absolutises the state dir).
+  verified: Reproduced and fixed in this session.
+- id: L11
+  layer: Shared truth
+  A: |-
+    BigQuery project and datasets (MRLOAD_BQ_PROJECT), the HubSpot portal of the token, the Drive scope root: identical by construction.
+  B: Same.
+  C: Same.
+  parity: Parallel
+  diverges: None, provided .env agrees (L6) and the Google identity agrees (L5).
+  remediation: |-
+    scripts/run_pass1.sh preflight prints the project, the portal id and the depth-1 node count: compare them.
+  verified: —
+- id: L12
+  layer: Offline probe (no credentials)
+  A: |-
+    Notebook section 8: unit tests, e2e rehearsal clean (41/41), dirty (stops at the dbt gate).
+  B: |-
+    python -m pytest tests -q --ignore=tests/e2e; scripts/e2e_rehearsal.sh; SCENARIO=dirty scripts/e2e_rehearsal.sh
+  C: 'Same as B (needs requirements-dev: duckdb, dbt-duckdb).'
+  parity: Parallel
+  diverges: None.
+  remediation: —
+  verified: 41/41 on this container.
+- id: L13
+  layer: Updates over time
+  A: |-
+    Zip: re-download and overwrite (state in .mrload/ survives only if you extract over the same folder carefully). Clone: git pull.
+  B: git pull
+  C: git pull
+  parity: Divergent
+  diverges: The zip motion has no incremental update path.
+  remediation: Convert in place once; afterwards git pull like B and C.
+  verified: —
+- id: L14
+  layer: 'Pass-2 decisions: view and edit review/deal_decisions.csv'
+  A: |-
+    VS Code on the clone (Rainbow CSV) — the file is under .mrload/review/ of the WSL or Windows clone; or Invoke-Ubuntu 'column -s, -t < .mrload/review/deal_decisions.csv' to print it.
+  B: |-
+    column -s, -t < .mrload/review/deal_decisions.csv | less -S (← → scroll, q); edit with nano or VS Code (WSL remote).
+  C: |-
+    cloudshell edit .mrload/review/deal_decisions.csv (Cloud Shell Editor, Ctrl+S); or nano; view with column -s, -t < … | less -S; or cloudshell download <file> → edit on the laptop → ⋮ Upload → mv ~/deal_decisions.csv ~/mir-load/.mrload/review/
+  parity: Conditional
+  diverges: |-
+    The file is per clone (L9): edit it on the surface that will run deals-dry / deals-live. Cloud Shell has no desktop editor, hence cloudshell edit or the download/upload round trip. column misaligns a row whose quoted field contains a comma (glance only). The writer emits CRLF; the reader accepts LF, CRLF or a mix, so any editor is fine.
+  remediation: |-
+    None needed. Bulk approve of every row: sed -i -E '2,$ s/,N,([^,]*)\r?$/,Y,\1/' .mrload/review/deal_decisions.csv (approve is the 15th column, before operator_note). Per-row approval is the point of the file, so prefer the editor.
+  verified: |-
+    Cloud Shell run of 2026-09-30: review → edit → deals-dry → ledger-export; the rehearsal flips approve on the same file layout.
+- id: L15
+  layer: BigQuery materialisation of the HubSpot import files + probe
+  A: |-
+    Invoke-Step 'ledger-export' (LIVE BQ_LOAD) loads review/hubspot_deals_import.csv and hubspot_companies_import.csv as mrload_raw.hubspot_deals_import / hubspot_companies_import; probe: Invoke-Ubuntu 'bq query --use_legacy_sql=false "select dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id from \`wisekeybq.mrload_raw.hubspot_deals_import\` order by company_name, dealname"'
+  B: |-
+    scripts/run_pass1.sh ledger-export; probe: bq query --use_legacy_sql=false 'SELECT dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id FROM `wisekeybq.mrload_raw.hubspot_deals_import` ORDER BY company_name, dealname'
+  C: |-
+    Same commands; bq is preauthenticated in Cloud Shell. Wizard file without the console: bq query --use_legacy_sql=false --format=csv --max_rows=100000 '<the query the step printed>' > ~/hubspot_deals_import.csv && cloudshell download ~/hubspot_deals_import.csv
+  parity: Parallel
+  diverges: |-
+    None: the two tables are shared truth (L11) for the import files, so the wizard's input no longer depends on a clone's review/ folder or on a file transfer. They mirror the ledger of the clone that ran ledger-export (L9) plus that clone's deal_decisions.csv; deals-dry outcomes that are not persisted (would_create) do not appear.
+  remediation: |-
+    Console route: BigQuery console → SELECT * EXCEPT(pipeline, dealstage, op_company_status, op_api_status, op_api_error) … WHERE op_approve = 'Y' → Save results → Sheets/CSV → HubSpot Import (hs_object_id → Deals·Record ID, company_hs_object_id → Companies·Record ID). Loader route: deals-live creates and associates the salvaged deals through the API (no Cloud Function needed).
+  verified: |-
+    Probe of 2026-09-30 on the sandbox (portal 49610528) from Cloud Shell: 10 rows = the 10 inferred anchors; 4 ELTA rows salvaged (op_company_status salvaged, company_hs_object_id 35988056623 found by name, never created); 6 resolved from pass 1; op_approve N and hs_object_id NULL everywhere (no deal created yet). Row for row the content of review/hubspot_deals_import.csv (rehearsal check 47: byte-identical load).
+steps:
+- n: 1
+  step: preflight
+  gate: ''
+  A: Invoke-Step 'preflight'
+  B: scripts/run_pass1.sh preflight
+  C: scripts/run_pass1.sh preflight
+  parity: Parallel
+  artefact: project id, portal id, depth-1 node count printed by the step
+  notes: Needs gauth.sh done on that surface (L5).
+- n: 2
+  step: walk
+  gate: ''
+  A: Invoke-Step 'walk'
+  B: scripts/run_pass1.sh walk
+  C: scripts/run_pass1.sh walk
+  parity: Parallel
+  artefact: |-
+    wc -l .mrload/library_hierarchy.csv (same node count); category counts (Equality checks)
+  notes: Deterministic for a given Drive state; walked_at differs.
+- n: 3
+  step: bq-init
+  gate: ''
+  A: Invoke-Step 'bq-init'
+  B: scripts/run_pass1.sh bq-init
+  C: scripts/run_pass1.sh bq-init
+  parity: Parallel
+  artefact: bq ls wisekeybq:mrload_raw lists the 4 ledger tables
+  notes: Idempotent.
+- n: 4
+  step: bq-load
+  gate: LIVE BQ_LOAD
+  A: $ConfirmLive = $true; Invoke-Step 'bq-load'
+  B: scripts/run_pass1.sh bq-load (type YES)
+  C: scripts/run_pass1.sh bq-load (type YES)
+  parity: Parallel
+  artefact: numRows of mrload_raw.library_hierarchy == walk rows
+  notes: --replace rewrites data AND schema (30 columns on the branch).
+- n: 5
+  step: hs-props
+  gate: LIVE PROPERTY_CREATE
+  A: Invoke-Step 'hs-props'
+  B: scripts/run_pass1.sh hs-props
+  C: scripts/run_pass1.sh hs-props
+  parity: Parallel
+  artefact: exists/created counts; second run = exists everywhere
+  notes: 'Idempotent through HubSpot''s own listing: safe from any surface.'
+- n: 6
+  step: dbt
+  gate: ''
+  A: Invoke-Step 'dbt'
+  B: scripts/run_pass1.sh dbt
+  C: scripts/run_pass1.sh dbt
+  parity: Parallel
+  artefact: |-
+    PASS=7 models; 49 tests: 0 fail, 1 warn (assert_every_attachable_file_indexed: ELTA/Aselsan)
+  notes: |-
+    Same dbt project → same DDL; the FK error of 2026-09-15 was identical on every surface.
+- n: 7
+  step: hs-props-verify
+  gate: ''
+  A: Invoke-Step 'hs-props-verify'
+  B: scripts/run_pass1.sh hs-props-verify
+  C: scripts/run_pass1.sh hs-props-verify
+  parity: Parallel
+  artefact: '.mrload/review/stacksync_mapping.csv: every row ok'
+  notes: Needs the dbt catalog of that surface's run.
+- n: 8
+  step: review
+  gate: ''
+  A: Invoke-Step 'review'
+  B: scripts/run_pass1.sh review
+  C: scripts/run_pass1.sh review
+  parity: Parallel
+  artefact: |-
+    row counts of deal_anchors.csv, deal_documents.csv, companies.csv, deal_decisions.csv
+  notes: 'Offline: reads the walk CSV only.'
+- n: 9
+  step: companies-dry
+  gate: ''
+  A: Invoke-Step 'companies-dry'
+  B: scripts/run_pass1.sh companies-dry
+  C: scripts/run_pass1.sh companies-dry
+  parity: Parallel
+  artefact: status counts (matched_by_name / would_create / ambiguous_match)
+  notes: ''
+- n: 10
+  step: companies-live
+  gate: LIVE COMPANY_CREATE
+  A: Invoke-Step 'companies-live'
+  B: scripts/run_pass1.sh companies-live
+  C: scripts/run_pass1.sh companies-live
+  parity: Parallel
+  artefact: ledger companies_resolved counts
+  notes: Idempotent through HubSpot name search; a second surface finds matched_by_name.
+- n: 11
+  step: attach-dry
+  gate: ''
+  A: Invoke-Step 'attach-dry'
+  B: scripts/run_pass1.sh attach-dry
+  C: scripts/run_pass1.sh attach-dry
+  parity: Parallel
+  artefact: attachable row count
+  notes: ''
+- n: 12
+  step: attach-upload
+  gate: LIVE FILES_UPLOAD
+  A: Invoke-Step 'attach-upload'
+  B: scripts/run_pass1.sh attach-upload
+  C: scripts/run_pass1.sh attach-upload
+  parity: Conditional
+  artefact: ledger files_uploaded uploaded=N
+  notes: 'Idempotent through the LOCAL ledger only (L9): one surface, or copy the ledger.'
+- n: 13
+  step: attach-notes
+  gate: LIVE FILE_NOTES_POST
+  A: Invoke-Step 'attach-notes'
+  B: scripts/run_pass1.sh attach-notes
+  C: scripts/run_pass1.sh attach-notes
+  parity: Conditional
+  artefact: ledger file_notes_posted attached=N; one note→company association per note
+  notes: Same ledger condition as attach-upload.
+- n: 14
+  step: ledger-export
+  gate: LIVE BQ_LOAD
+  A: Invoke-Step 'ledger-export'
+  B: scripts/run_pass1.sh ledger-export
+  C: scripts/run_pass1.sh ledger-export
+  parity: Conditional
+  artefact: |-
+    hs_company_id / hs_note_id populated in silver; mrload_raw.hubspot_deals_import / hubspot_companies_import loaded (schema JSONs in .mrload/ledger_export/)
+  notes: |-
+    Exports THIS clone's ledger: run it from the surface that ran the live steps. Also regenerates the two import files from ledger + deal_decisions.csv and prints the console query for the wizard route.
+- n: 15
+  step: deals-dry
+  gate: ''
+  A: Invoke-Step 'deals-dry'
+  B: scripts/run_pass1.sh deals-dry
+  C: scripts/run_pass1.sh deals-dry
+  parity: Parallel
+  artefact: |-
+    would_create per approved anchor; notes count per deal; companies_resolved *_pass2 statuses persisted (salvage runs in dry mode too)
+  notes: |-
+    Reads deal_decisions.csv of that clone (edit it there: L14). Orphan companies are searched by name, never created.
+- n: 15b
+  step: ledger-export (import tables, wizard route)
+  gate: LIVE BQ_LOAD
+  A: Invoke-Step 'ledger-export'
+  B: scripts/run_pass1.sh ledger-export
+  C: scripts/run_pass1.sh ledger-export
+  parity: Conditional
+  artefact: |-
+    mrload_raw.hubspot_deals_import: one row per inferred anchor, company_hs_object_id filled for resolved AND salvaged companies; hubspot_companies_import: the companies confirmed missing
+  notes: |-
+    Optional branch after deals-dry when the deals go through the HubSpot Import wizard (BigQuery console → Save results) instead of deals-live. Does not make pass 2 stale in pipeline_state.sh; its 'next' hint still proposes deals-live. Ledger condition as row 14.
+- n: 15c
+  step: BigQuery probe of the import tables
+  gate: ''
+  A: |-
+    Invoke-Ubuntu 'bq query --use_legacy_sql=false "select dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id from \`wisekeybq.mrload_raw.hubspot_deals_import\` order by company_name, dealname"'
+  B: |-
+    bq query --use_legacy_sql=false 'SELECT dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id FROM `wisekeybq.mrload_raw.hubspot_deals_import` ORDER BY company_name, dealname'
+  C: |-
+    bq query --use_legacy_sql=false 'SELECT dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id FROM `wisekeybq.mrload_raw.hubspot_deals_import` ORDER BY company_name, dealname'
+  parity: Parallel
+  artefact: the table above — identical from every surface (bq reads the same dataset)
+  notes: |-
+    Probe of 2026-09-30 on the sandbox (portal 49610528) from Cloud Shell: 10 rows = the 10 inferred anchors; 4 ELTA rows salvaged (op_company_status salvaged, company_hs_object_id 35988056623 found by name, never created); 6 resolved from pass 1; op_approve N and hs_object_id NULL everywhere (no deal created yet). Row for row the content of review/hubspot_deals_import.csv (rehearsal check 47: byte-identical load).
+- n: 16
+  step: deals-live
+  gate: LIVE DEAL_CREATE
+  A: Invoke-Step 'deals-live'
+  B: scripts/run_pass1.sh deals-live
+  C: scripts/run_pass1.sh deals-live
+  parity: Conditional
+  artefact: ledger deals_created created=N; deal→company and note→deal associations
+  notes: |-
+    Ledger-keyed (L9); one deal per inferred anchor. This is the programmatic loader for the salvaged deals too: an approved row whose company was salvaged is created and associated to that company id (no Cloud Function needed). create_error = pipeline / dealstage is not an id of THIS portal (R21).
+- n: 17
+  step: ledger-export (again)
+  gate: LIVE BQ_LOAD
+  A: Invoke-Step 'ledger-export'
+  B: scripts/run_pass1.sh ledger-export
+  C: scripts/run_pass1.sh ledger-export
+  parity: Conditional
+  artefact: |-
+    silver_library_deal.hs_deal_id populated; hubspot_deals_import.hs_object_id filled and op_api_status = created
+  notes: Closes the loop after pass 2.
+- n: 18
+  step: status / where am I
+  gate: ''
+  A: Invoke-Step 'status'; Get-PipelineState
+  B: scripts/run_pass1.sh status; scripts/dev/pipeline_state.sh
+  C: scripts/run_pass1.sh status; scripts/dev/pipeline_state.sh
+  parity: Parallel
+  artefact: same done/pending picture per clone
+  notes: Checkpoints are per clone (L9).
+- n: 19
+  step: unmigrate (rollback)
+  gate: LIVE UNMIGRATE
+  A: Invoke-Step 'unmigrate'
+  B: scripts/run_pass1.sh unmigrate
+  C: scripts/run_pass1.sh unmigrate
+  parity: Conditional
+  artefact: notes deleted per the ledger
+  notes: Uses the ledger of the clone that attached them.
+remediation:
+- id: R01
+  symptom: 'inspect: command not found'
+  layer: L8
+  surfaces: A B C
+  cause: A comment line of the sequence typed as a command.
+  fix: column -s, -t < .mrload/review/deal_anchors.csv | less -S
+  verified: user log 2026-09-14
+- id: R02
+  symptom: '.mrload/logs/dbt-…log: No such file or directory during the dbt step'
+  layer: L10
+  surfaces: A B C
+  cause: |-
+    Relative state dir + cd dbt inside the step: logs and the dbt checkpoint were lost.
+  fix: 'git pull (fixed in d4d5dfb: state and ledger paths absolutised).'
+  verified: reproduced + fixed
+- id: R03
+  symptom: 'Not found: Table …mrload_raw.library_hierarchy'
+  layer: L8
+  surfaces: A B C
+  cause: dbt run before walk / bq-init / bq-load.
+  fix: |-
+    scripts/run_pass1.sh walk → bq-init → bq-load → dbt; scripts/dev/pipeline_state.sh names the next step.
+  verified: user log 2026-09-14
+- id: R04
+  symptom: 'Not found: Table …mrload.silver_library_deal while deal_anchors.csv exists'
+  layer: L1
+  surfaces: A B C
+  cause: |-
+    review (Python, offline) ran on the merged code; dbt did not (6-model run predates the merge).
+  fix: scripts/run_pass1.sh dbt on the merged branch → PASS=7.
+  verified: user log 2026-09-15
+- id: R05
+  symptom: |-
+    Foreign Key constraint references legacy_company_id but it is not a Primary Key column
+  layer: L8
+  surfaces: A B C
+  cause: |-
+    Enforced contract renders constraints into BigQuery DDL; the FK pointed at a non-PK column.
+  fix: 'git pull (953f6f4: FKs reference company_node_key) → dbt.'
+  verified: fixed; user confirmed
+- id: R06
+  symptom: Sudo is disabled on this machine
+  layer: L3
+  surfaces: A B
+  cause: 'Windows 11 sudo.exe: the bootstrap was started in Git Bash / PowerShell.'
+  fix: Run bash scripts/bootstrap_ubuntu.sh INSIDE Ubuntu, without sudo.
+  verified: docs/WEZTERM_UBUNTU.md
+- id: R07
+  symptom: '\r: command not found / script ''not found'''
+  layer: L2
+  surfaces: A B
+  cause: CRLF checkout (Git for Windows autocrlf before .gitattributes).
+  fix: |-
+    git add --renormalize . && git rm -r -q --cached . && git reset -q --hard; scripts/dev/crlf_check.sh
+  verified: docs/WEZTERM_UBUNTU.md
+- id: R08
+  symptom: 'Permission denied: scripts/run_pass1.sh'
+  layer: L2
+  surfaces: A (zip copied to the Linux side)
+  cause: Exec bits dropped by a Windows extraction.
+  fix: |-
+    chmod +x scripts/*.sh scripts/dev/*.sh scripts/e2e/bin/*  — or convert the folder in place (restores modes).
+  verified: verified in this session
+- id: R09
+  symptom: 'env clinic: ''not a git repository'' warning; install_git_hooks refuses'
+  layer: L7
+  surfaces: A (zip)
+  cause: No .git in an unzipped folder.
+  fix: |-
+    git init && git remote add origin … && git fetch origin <branch> && git reset --hard origin/<branch> && scripts/dev/install_git_hooks.sh (printed by the clinic).
+  verified: verified in this session
+- id: R10
+  symptom: gcloud auth application-default login --scopes=…drive rejected
+  layer: L5
+  surfaces: A B C
+  cause: gcloud's own OAuth client may not request Drive scopes on the ADC path.
+  fix: |-
+    scripts/gauth.sh (gcloud auth login --enable-gdrive-access --update-adc, quota project, API enablement).
+  verified: gauth.sh header; runbook
+- id: R11
+  symptom: walk returns 0 nodes / preflight dies on the probe
+  layer: L5
+  surfaces: A B C
+  cause: |-
+    The logged-in account cannot see the scope root, or drive_id in the card is wrong.
+  fix: |-
+    scripts/dev/auth_check.sh; log in with the owning account; check context/cards/library.yaml.
+  verified: runbook
+- id: R12
+  symptom: 403 on hs-props
+  layer: L6
+  surfaces: A B C
+  cause: Private app lacks the schema-write scope of that object type.
+  fix: Add the scope named in the 403 body; re-run hs-props (idempotent).
+  verified: runbook P
+- id: R13
+  symptom: dbt test FAIL at the gate
+  layer: L8
+  surfaces: A B C
+  cause: Cardinality violation in Drive (multi-parent file, duplicate company name, …).
+  fix: |-
+    scripts/dev/dbt_failures.sh → fix in Drive → walk; the tracker marks bq-load… stale so you re-enter in order.
+  verified: rehearsal dirty scenario
+- id: R14
+  symptom: Duplicate notes / files / deals after switching surface
+  layer: L9
+  surfaces: A B C
+  cause: Live steps keyed on the local SQLite ledger.
+  fix: |-
+    One surface for attach-upload / attach-notes / deals-live, or copy .mrload/ledger.sqlite; future ledger-import from mrload_raw.
+  verified: run sheet / runbook
+- id: R15
+  symptom: Notebook output reads g.a.r.b.l.e.d
+  layer: L8
+  surfaces: A
+  cause: wsl.exe writes UTF-16 when captured.
+  fix: Re-run the Switches cell (helpers set WSL_UTF8=1).
+  verified: helpers.ps1
+- id: R16
+  symptom: mr-load-helpers.ps1 not found
+  layer: L8
+  surfaces: A
+  cause: $RepoWin does not point at the clone / notebook opened outside the repo.
+  fix: |-
+    Set $RepoWin = 'C:\Users\ayaobama\Documents\AnthonySalesOps\Codebase\miraex\mir-load' in the Switches cell.
+  verified: notebooks
+- id: R17
+  symptom: No prompt appears for Set-EnvKey
+  layer: L6
+  surfaces: A
+  cause: Extension build without Read-Host support.
+  fix: 'Terminal: scripts/dev/env_set.sh HUBSPOT_SANDBOX_TOKEN (silent prompt).'
+  verified: compass 4.2
+- id: R18
+  symptom: 'deals-dry: no_company_resolved on every row'
+  layer: L8
+  surfaces: A B C
+  cause: Pass 2 attempted before companies-live.
+  fix: Run companies-dry/live (and attach-notes for the note associations) first.
+  verified: runbook 7
+- id: R19
+  symptom: agate RuntimeWarning 'table_owner' after dbt
+  layer: L8
+  surfaces: A B C
+  cause: dbt docs generate on BigQuery.
+  fix: Harmless; no action.
+  verified: user log 2026-09-14
+- id: R20
+  symptom: 'dbt deps: ''not a gzip file'''
+  layer: L4
+  surfaces: sandbox only
+  cause: Package download altered by an outbound proxy.
+  fix: |-
+    git clone --depth 1 --branch 1.4.1 https://github.com/dbt-labs/dbt-utils dbt/dbt_packages/dbt_utils (then dbt deps is skipped).
+  verified: this container only
+- id: R21
+  symptom: 'deals-dry / deals-live: failed ×N, error create_error'
+  layer: L8
+  surfaces: A B C
+  cause: |-
+    dealstage / pipeline value is not a STAGE / PIPELINE ID of the portal the token belongs to (sandbox ids differ from production).
+  fix: |-
+    Read the ids once: set -a; source .env; set +a; curl -s -H "Authorization: Bearer $HUBSPOT_SANDBOX_TOKEN" https://api.hubapi.com/crm/v3/pipelines/deals | python3 -c 'import json,sys
+    for p in json.load(sys.stdin)["results"]:
+        print(p["id"], p["label"]); [print("   ", s["id"], s["label"]) for s in p["stages"]]' — then fill pipeline / dealstage in deal_decisions.csv or set MRLOAD_DEAL_PIPELINE / MRLOAD_DEAL_STAGE.
+  verified: sandbox pass 2 (6 failed rows); deals_summary prints the hint
+- id: R22
+  symptom: |-
+    deals-dry: no_company_resolved on rows whose company folder is year-prefixed (2021_ELTA, 2022_Aselsan)
+  layer: L8
+  surfaces: A B C
+  cause: |-
+    Pass 1 never resolves engagement folders (companies.py filters company_folder); before 6f38600 pass 2 had no company to associate with.
+  fix: |-
+    git pull (6f38600): pass 2 salvages by searching the remainder name (ELTA); found → matched_by_name_pass2 and the deal associates to it; not found → not_in_portal_pass2 and a hubspot_companies_import row. The pipeline never creates the company.
+  verified: 'sandbox 2026-09-30: 4 ELTA rows salvaged → company 35988056623'
+- id: R23
+  symptom: The HubSpot import CSVs cannot be handed to the wizard from Cloud Shell
+  layer: L9 / L11
+  surfaces: C
+  cause: |-
+    The files live in the Cloud Shell clone's .mrload/review/; no desktop, no file transfer to the browser that runs the wizard.
+  fix: |-
+    git pull (765cd01): ledger-export loads them as mrload_raw.hubspot_deals_import / hubspot_companies_import. Console: query → Save results → Sheets/CSV → Import. Terminal: bq query --use_legacy_sql=false --format=csv --max_rows=100000 '…' > ~/f.csv && cloudshell download ~/f.csv
+  verified: probe 2026-09-30; rehearsal checks 46–47
+- id: R24
+  symptom: How to look at or edit a review CSV on Cloud Shell
+  layer: L8
+  surfaces: C
+  cause: |-
+    No desktop editor; column -s, -t misaligns a row whose quoted field contains a comma.
+  fix: |-
+    cloudshell edit <file> (Cloud Shell Editor) or nano to edit; column -s, -t < <file> | less -S for a glance; less -S <file> for the exact text; cloudshell download <file> then ⋮ Upload and mv ~/<file> ~/mir-load/.mrload/review/ for a laptop round trip.
+  verified: this session (L14)
+- id: R25
+  symptom: |-
+    A company-level working folder (Drafts/pre-PO) became a HubSpot company in pass 1 and anchors a deal
+  layer: L8
+  surfaces: A B C
+  cause: |-
+    The walker classifies every folder at company level as company_folder unless its name is year-prefixed; companies-live created it in the sandbox.
+  fix: |-
+    Before the production walk: add the folder to the exclusions in context/cards/library.yaml, delete the sandbox company, re-run walk → bq-load → dbt → review. Not done yet — flagged from the probe.
+  verified: 'probe 2026-09-30 (row 1: company_name Drafts/pre-PO, id 58614964830)'
+equality_checks:
+- stage: after walk
+  compare: node count
+  A: Invoke-Ubuntu 'wc -l .mrload/library_hierarchy.csv'
+  BC: wc -l .mrload/library_hierarchy.csv
+  expected: same number on every surface (header + nodes)
+- stage: after walk
+  compare: category counts
+  A: |-
+    Invoke-Ubuntu 'python3 -c "import csv,collections;print(collections.Counter(r[\"libr_category\"] for r in csv.DictReader(open(\".mrload/library_hierarchy.csv\"))))"'
+  BC: |-
+    python3 -c 'import csv,collections;print(collections.Counter(r["libr_category"] for r in csv.DictReader(open(".mrload/library_hierarchy.csv"))))'
+  expected: e.g. segment 3, company_folder 54, engagement_folder 3, taxonomy 4, document 346
+- stage: after bq-load
+  compare: rows in bronze
+  A: |-
+    Invoke-Ubuntu 'bq show --format=prettyjson wisekeybq:mrload_raw.library_hierarchy | grep numRows'
+  BC: |-
+    bq show --format=prettyjson wisekeybq:mrload_raw.library_hierarchy | grep numRows
+  expected: == walk node count
+- stage: after dbt
+  compare: models and tests
+  A: read the dbt cell output
+  BC: read the step output
+  expected: 'PASS=7 … TOTAL=7; tests: 0 fail, 1 warn'
+- stage: after dbt
+  compare: non-passing tests
+  A: Invoke-Ubuntu 'scripts/dev/dbt_failures.sh'
+  BC: scripts/dev/dbt_failures.sh
+  expected: only assert_every_attachable_file_indexed (warn)
+- stage: after review
+  compare: inferred deals (Python side)
+  A: |-
+    Invoke-Ubuntu 'wc -l .mrload/review/deal_anchors.csv .mrload/review/deal_documents.csv'
+  BC: wc -l .mrload/review/deal_anchors.csv .mrload/review/deal_documents.csv
+  expected: same counts on every surface
+- stage: after dbt
+  compare: inferred deals (BigQuery side)
+  A: |-
+    Invoke-Ubuntu 'bq query --use_legacy_sql=false "select anchor_kind, count(*) from \`wisekeybq.mrload.silver_library_deal\` group by 1"'
+  BC: |-
+    bq query --use_legacy_sql=false 'select anchor_kind, count(*) from `wisekeybq.mrload.silver_library_deal` group by 1'
+  expected: == deal_anchors.csv rows by kind
+- stage: after hs-props-verify
+  compare: StackSync sheet
+  A: Invoke-Ubuntu 'scripts/run_pass1.sh hs-props-verify'
+  BC: scripts/run_pass1.sh hs-props-verify
+  expected: every row status ok (the step exits 1 otherwise)
+- stage: any time
+  compare: sequence position
+  A: Get-PipelineState
+  BC: scripts/dev/pipeline_state.sh
+  expected: per clone; the same 'done' set if both surfaces ran the same steps
+- stage: after deals-dry
+  compare: salvage statuses in the ledger
+  A: Invoke-Ubuntu 'scripts/run_pass1.sh status'
+  BC: scripts/run_pass1.sh status
+  expected: |-
+    companies_resolved: matched_by_name_pass2 = salvaged companies (ELTA), not_in_portal_pass2 = rows of hubspot_companies_import
+- stage: after ledger-export
+  compare: the import tables (the wizard's input)
+  A: |-
+    Invoke-Ubuntu 'bq query --use_legacy_sql=false "select dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id from \`wisekeybq.mrload_raw.hubspot_deals_import\` order by company_name, dealname"'
+  BC: |-
+    bq query --use_legacy_sql=false 'SELECT dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id FROM `wisekeybq.mrload_raw.hubspot_deals_import` ORDER BY company_name, dealname'
+  expected: |-
+    one row per inferred anchor; company_hs_object_id on resolved and salvaged rows; hs_object_id NULL until deals-live or the wizard import; identical from every surface (2026-09-30: 10 rows, 4 salvaged, 6 resolved)
+- stage: after ledger-export
+  compare: table == review file
+  A: |-
+    Invoke-Ubuntu 'bq query --use_legacy_sql=false "select count(*) n from \`wisekeybq.mrload_raw.hubspot_deals_import\`"; wc -l .mrload/review/hubspot_deals_import.csv'
+  BC: |-
+    bq query --use_legacy_sql=false 'select count(*) n from `wisekeybq.mrload_raw.hubspot_deals_import`'; wc -l .mrload/review/hubspot_deals_import.csv
+  expected: |-
+    n = CSV lines − 1 (rehearsal check 47: the loaded copy is byte-identical to the review file)
+- stage: after deals-live + ledger-export
+  compare: Record IDs written back
+  A: |-
+    Invoke-Ubuntu 'bq query --use_legacy_sql=false "select dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id from \`wisekeybq.mrload_raw.hubspot_deals_import\` order by company_name, dealname"'
+  BC: |-
+    bq query --use_legacy_sql=false 'SELECT dealname, company_name, company_hs_object_id, op_company_status, op_approve, hs_object_id FROM `wisekeybq.mrload_raw.hubspot_deals_import` ORDER BY company_name, dealname'
+  expected: |-
+    hs_object_id filled and op_api_status = created on the rows deals-live created; the same query on every surface

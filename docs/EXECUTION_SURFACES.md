@@ -2,7 +2,9 @@
 
 Companion to `docs/EXECUTION_SURFACES.xlsx`, which holds the same material as tables
 (*Overview*, *Layers* L0–L15, *Pipeline steps* 1–19 with the pass-2 wizard route 15b–15c,
-*Remediation* R01–R25, *Equality checks*). This page is the narrative: what diverged between the
+*Remediation* R01–R25, *Equality checks*). The workbook is built from `docs/execution_surfaces.yaml`
+by the `pass-sequence` skill (`.claude/skills/pass-sequence/`), which also produces this record,
+the `PASS{N}_SEQUENCE.md` pages and, on request, a Polyglot run sheet — edit the YAML, rebuild. This page is the narrative: what diverged between the
 surfaces, how each divergence was observed, what closed it, and the probe that ended the
 reconciliation on 2026-09-30. The pass-2 recipe itself is `docs/PASS2_SEQUENCE.md`; the step
 reference is `docs/RUNBOOK_PASS1.md`.

@@ -1,0 +1,23 @@
+{
+  "skill_name": "pass-sequence",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We just finished pass 3 of mr-load on Cloud Shell: a new step `contacts-live` (gate MRLOAD_APPROVE_CONTACT_CREATE) after `deals-live`, and a probe I ran: `bq query --use_legacy_sql=false 'select count(*) from mrload_raw.contacts_resolved'` returned 42. Produce the pass-3 documentation set in order: docs/PASS3_SEQUENCE.md, the timeline in docs/EXECUTION_SURFACES.md, the workbook rows via docs/execution_surfaces.yaml, and tell me whether the run sheet needs a cell. Docs only.",
+      "expected_output": "PASS3_SEQUENCE.md with preconditions, the ordered bash block including look/edit inserts and the probe, a branch point section, the probe pasted as evidence with the date; EXECUTION_SURFACES.md timeline rows appended (not rewritten) with commit hashes; execution_surfaces.yaml gains a Pipeline steps row for contacts-live with a parity word and an Equality check for the probe; the workbook rebuilt with --verify; a statement about the run sheet cell; no pipeline code changed.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "There is a hand-made docs/EXECUTION_SURFACES.xlsx in this repo but no YAML source. Bootstrap the spec from it, prove the rebuild is identical, and add a Remediation row for the error I keep hitting on WSL: `bq: command not found` after opening a new WezTerm tab (gcloud SDK not on PATH in non-login shells).",
+      "expected_output": "docs/execution_surfaces.yaml produced by dump_surfaces_xlsx.py; build_surfaces_xlsx.py --compare reports identical values; a new R-row with symptom, layer, surfaces (B), cause, fix, verified; the workbook rebuilt with --verify and the recalculation limitation stated if LibreOffice is unavailable.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Our new project ic-load has scripts/run_pipeline.sh with steps preflight, extract, load (gate IC_APPROVE_LOAD), transform, publish (gate IC_APPROVE_PUBLISH), status, and PowerShell helpers in notebooks/ic-load-helpers.ps1. Give us the sequential motion as a Polyglot run sheet, with an optional branch after transform that runs `export-csv` for the manual route.",
+      "expected_output": "A minimal docs/execution_surfaces.yaml with the six steps (gates on load and publish), a generated notebooks/ic-load-run.dib via build_run_sheet.py with a steps table, a mermaid flow with LIVE markers and the branch edge, a switches cell loading ic-load-helpers.ps1, one Invoke-Step cell per runnable step, branch cells after transform, and the streamlined-pattern cells; the output reviewed rather than published unread.",
+      "files": []
+    }
+  ]
+}
